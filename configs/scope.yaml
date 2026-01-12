@@ -1,0 +1,26 @@
+# configs/scope.yaml
+
+project:
+  name: "CIKA_SRC_LLPS"
+  description: "Curvature-induced kinase activation (CIKA) condensate around Src-family kinases"
+organism:
+  taxon_id: 9606
+  scientific_name: "Homo sapiens"
+
+id_policy:
+  canonical_id: "uniprot_acc"   # UniProt Accession
+  gene_symbol_field: "gene_symbol"
+  allow_multiple_uniprot_hits: false
+
+logging:
+  level: "INFO"
+
+uniprot:
+  endpoint: "https://rest.uniprot.org"
+  timeout_sec: 30
+  max_retries: 3
+  sleep_sec_between_calls: 0.1
+
+quality_gate:
+  fail_on_unmapped: true
+  fail_on_ambiguous: true

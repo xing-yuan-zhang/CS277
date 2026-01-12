@@ -1,0 +1,30 @@
+# configs/seeds.yaml
+
+seeds:
+  - query: P12931
+    weight: 1.0
+    role: Src-family-kinase
+    evidence:
+      - gene_symbol:SRC
+      - source:manual_seed_list
+
+  - query: Q15642
+    weight: 1.0
+    role: CIP4-TOCA-family
+    evidence:
+      - gene_symbol:TRIP10
+      - source:manual_seed_list
+
+  - query: Q96RU3
+    weight: 1.0
+    role: FBP17
+    evidence:
+      - gene_symbol:FNBP1
+      - source:manual_seed_list
+
+  - query: Q5T0N5
+    weight: 1.0
+    role: TOCA-1
+    evidence:
+      - gene_symbol:FNBP1L
+      - source:manual_seed_list

@@ -1,0 +1,33 @@
+organism:
+  taxid: 9606
+  name: human
+
+seeds:
+  path: inputs/seeds/seeds.tsv
+  id_type: gene_name
+
+string:
+  edges_path: inputs/ppi/STRING/9606.protein.links.detailed.v12.0.txt.gz
+  use_api: false
+  score_field: combined_score
+  score_min: 700
+  neighbors_hops: 2
+  max_nodes: 5000
+
+annotations:
+  uniprot:
+    enabled: true
+    cache_path: inputs/annotations/uniprot_cache.tsv
+  llps:
+    enabled: true
+    phasepdb_path: inputs/annotations/LLPS/PhaSepDB.tsv
+    llpsdb_path: inputs/annotations/LLPS/LLPSDB.tsv
+  domains:
+    enabled: true
+    interpro_tsv: inputs/annotations/domains/interproscan_summary.tsv
+    sh3_keywords: ["SH3"]
+  motifs:
+    enabled: true
+    motif_regex:
+      - name: PxxP
+        pattern: "P..P"
