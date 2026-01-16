@@ -119,22 +119,30 @@ def fetch_uniprot_names(accessions, batch_size=500) -> pd.DataFrame:
 if __name__ == "__main__":
     ROOT = Path(__file__).resolve().parents[2]
 
-    inp_path = ROOT / "outputs/diffusion/diffusion_scores_alpha0.70.csv"
-    inp = pd.read_csv(inp_path)
+    inp_path = ROOT / "outputs/diffusion/diffusion_scores_alpha0.85.csv"
+    df = pd.read_csv(inp_path)
 
-    inp = inp.copy()
-    inp["node_clean"] = clean_node_series(inp["node"])
+    df = df.copy()
+    df["node_clean"] = clean_node_series(df["node"])
 
-    mapping = fetch_uniprot_names(inp["node_clean"])
+    mapping = fetch_uniprot_names(df["node_clean"])
 
-    out = inp.merge(mapping, left_on="node_clean", right_on="accession", how="left")
+    df = df.merge(
+        mapping[["accession", "gene_symbol"]],
+        left_on="node_clean",
+        right_on="accession",
+        how="left"
+    )
 
-    out_path = ROOT / "outputs/diffusion/diffusion_scores_alpha0.70_with_names.csv"
-    out.to_csv(out_path, index=False)
+    df["node"] = df["gene_symbol"].fillna(df["node"])
+
+    df = df.sort_values("score", ascending=False)
+
+    out = df[["node", "score", "degree", "weighted_degree"]]
+
+    out_path = ROOT / "outputs/diffusion/diffusion_scores_alpha0.85_gene.tsv"
+    out.to_csv(out_path, sep="\t", index=False)
+
+    mapped_n = df["gene_symbol"].notna().sum()
     print(f"Wrote: {out_path}")
-
-    mapped_n = out["gene_symbol"].notna().sum()
-    print(f"Mapped: {mapped_n}/{len(out)} ({mapped_n/len(out):.1%})")
-    if mapped_n < len(out):
-        missing = out.loc[out["gene_symbol"].isna(), "node"].head(30).tolist()
-        print("Example missing nodes:", missing)
+    print(f"Mapped to gene symbols: {mapped_n}/{len(df)} ({mapped_n/len(df):.1%})")

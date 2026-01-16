@@ -1,4 +1,4 @@
-# src/graph_constructor/build_graph.py
+# src/graph_constructor/build_graph_with_multiplier.py
 from __future__ import annotations
 from pathlib import Path
 import argparse
@@ -81,6 +81,38 @@ def compute_seed_weight_from_annotations(row: pd.Series) -> float:
     return float(w)
 
 
+def compute_node_prior_mult_from_annotations(row: pd.Series) -> float:
+    """
+    Annotation-aware node prior multiplier.
+    This is intentionally milder than seed_weight defaults:
+      - LLPS prior: ×1.2 (if is_LLPS_any==1)
+      - SH3: ×1.1
+      - PRD: ×1.1
+      - SH3-related ELM motifs: +10% per motif, capped at +50%
+      - length >= 800: ×1.05
+    """
+    m = 1.0
+
+    if _to_int(row.get("is_LLPS_any", 0), 0) == 1:
+        m *= 1.2
+
+    if _to_bool(row.get("has_SH3", False)):
+        m *= 1.1
+
+    if _to_bool(row.get("has_PRD", False)):
+        m *= 1.1
+
+    k = _to_int(row.get("elm_sh3_related", 0), 0)
+    if k > 0:
+        m *= (1.0 + 0.10 * min(k, 5))
+
+    L = _to_float(row.get("length", 0.0), 0.0)
+    if L >= 800:
+        m *= 1.05
+
+    return float(m)
+
+
 def choose_seed_component(G: nx.Graph, seeds: set[str]) -> set[str] | None:
     seeds_in_graph = seeds.intersection(G.nodes)
     if not seeds_in_graph:
@@ -149,6 +181,9 @@ def main():
     if seed_mask.any():
         n.loc[seed_mask, "seed_weight"] = n.loc[seed_mask].apply(compute_seed_weight_from_annotations, axis=1)
 
+    n["node_prior_mult"] = n.apply(compute_node_prior_mult_from_annotations, axis=1)
+
+
     G = nx.Graph()
 
     for _, r in n.iterrows():
@@ -185,15 +220,15 @@ def main():
         comp = max(nx.connected_components(G), key=len)
         kept_nodes = set(comp)
         G = G.subgraph(kept_nodes).copy()
-        stats_lines.append(f"KEEP=largest, kept_nodes={len(kept_nodes):,}")
+        stats_lines.append(f"KEEP=largest: kept_nodes={len(kept_nodes):,}")
     elif args.keep == "seed":
         comp = choose_seed_component(G, seeds)
         if comp is not None:
             kept_nodes = comp
             G = G.subgraph(kept_nodes).copy()
-            stats_lines.append(f"KEEP=seed, kept_nodes={len(kept_nodes):,}")
+            stats_lines.append(f"KEEP=seed: kept_nodes={len(kept_nodes):,} (seed-component)")
         else:
-            stats_lines.append("KEEP=seed, no seeds found in graph, no filtering applied")
+            stats_lines.append("KEEP=seed: no seeds found in graph; no filtering applied")
 
     num_cc2 = nx.number_connected_components(G) if G.number_of_nodes() > 0 else 0
     cc_sizes2 = sorted([len(c) for c in nx.connected_components(G)], reverse=True) if G.number_of_nodes() > 0 else []

@@ -457,7 +457,7 @@ def main() -> None:
         )
         return
 
-    raise SystemExit(f"Unknown cmd: {args.cmd}")
+    raise SystemExit(f"err: {args.cmd}")
 
 if __name__ == "__main__":
     main()

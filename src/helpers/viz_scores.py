@@ -7,7 +7,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[2]
 PKL = str(ROOT / "inputs/pkl/ppi_subgraph.pkl")
-SCORES_CSV = str(ROOT / "outputs/diffusion/diffusion_scores_alpha0.70.csv")
+SCORES_CSV = str(ROOT / "outputs/diffusion/diffusion_scores_alpha0.85.csv")
 MAX_NODES = 1000
 
 def main():

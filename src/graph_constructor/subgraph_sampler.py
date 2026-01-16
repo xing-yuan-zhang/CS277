@@ -146,7 +146,7 @@ def pick_seed_set(seeds_df: pd.DataFrame, seed_roles: list[str], allow_missing_r
     if "role" not in seeds_df.columns:
         if allow_missing_role:
             return set(seeds_df.dropna(subset=["entry"])["entry"].tolist())
-        raise ValueError("seeds.mapped.tsv has no role column; pass --allow-missing-role or add role")
+        raise ValueError("seeds.mapped.tsv has no role column")
 
     seeds_df["role"] = seeds_df["role"].astype(str).str.strip()
 
@@ -174,14 +174,14 @@ def main():
         "--biogrid-physical-only",
         action="store_true",
         default=False,
-        help="If set, only keep BioGRID edges with biogrid_physical==1 (recommended).",
+        help="only keep BioGRID edges with biogrid_physical==1.",
     )
 
     ap.add_argument(
         "--topk-string-per-node",
         type=int,
         default=50,
-        help="Keep only top-K STRING neighbors per active node when expanding hops. 0 disables top-K.",
+        help="keep only top-K STRING neighbors per active node when expanding hops. 0 disables top-K.",
     )
 
     ap.add_argument("--max-nodes", type=int, default=5000)
@@ -191,19 +191,19 @@ def main():
     ap.add_argument(
         "--seed-roles",
         default="Src-family-kinase,CIP4-TOCA-family,FBP17,TOCA-1",
-        help="Comma-separated roles to USE as diffusion seeds (exclude hubs like downstream_signal by default).",
+        help="roles to USE as diffusion seeds (exclude hubs like downstream_signal by default).",
     )
 
     ap.add_argument(
         "--allow-missing-role",
         action="store_true",
-        help="If seeds file has no role column, allow using all entries as seeds.",
+        help="if seeds file has no role column, allow using all entries as seeds.",
     )
 
     ap.add_argument(
         "--patch-seed",
         default=None,
-        help="Optional: do local patch expansion for this seed (UniProt). Empty disables.",
+        help="do local patch expansion for this seed, empty disables.",
     )
 
     ap.add_argument(
@@ -211,21 +211,21 @@ def main():
         type=int,
         default=2,
         choices=[1, 2],
-        help="Local patch hops for --patch-seed (default 2).",
+        help="local patch hops for --patch-seed (default 2).",
     )
 
     ap.add_argument(
         "--patch-min-string-weight",
         type=float,
         default=None,
-        help="Override min-string-weight for patch only. None uses --min-string-weight.",
+        help="override min-string-weight for patch only.",
     )
 
     ap.add_argument(
         "--patch-topk-string-per-node",
         type=int,
         default=None,
-        help="Override topk-string-per-node for patch only. None uses --topk-string-per-node.",
+        help="override topk-string-per-node for patch only.",
     )
 
     args = ap.parse_args()
@@ -242,7 +242,7 @@ def main():
     seed_set = {x for x in seed_set if x and x.lower() != "nan"}
 
     if len(seed_set) == 0:
-        raise ValueError("No usable seed entries after role filtering. Check --seed-roles or seeds.mapped.tsv.")
+        raise ValueError("no usable seed entries after role filtering.")
 
     n1 = scan_collect_neighbors(
         edges_path=edges_path,
@@ -264,12 +264,12 @@ def main():
         nodes |= set(n2)
 
     # local patch for a specific seed with fixed 2-hop expansion
+    # patch only if the seed is in the original seed set and is biologically validated
     patch_seed = str(args.patch_seed).strip()
     if patch_seed and patch_seed.lower() != "none":
         patch_minw = args.min_string_weight if args.patch_min_string_weight is None else float(args.patch_min_string_weight)
         patch_topk = args.topk_string_per_node if args.patch_topk_string_per_node is None else int(args.patch_topk_string_per_node)
 
-        # patch only if the seed is in the original seed set and is biologically validated
         if patch_seed in seed_set:
             p1 = scan_collect_neighbors(
                 edges_path=edges_path,
@@ -279,8 +279,6 @@ def main():
                 topk_string_per_node=patch_topk,
             )
             patch_nodes = {patch_seed} | set(p1)
-
-            print(f"[PATCH-DEBUG] p1 neighbors count={len(p1)} example={list(sorted(p1))[:10]}")
 
             if args.patch_hops == 2:
                 p2 = scan_collect_neighbors(
@@ -296,16 +294,15 @@ def main():
             nodes |= patch_nodes
             after = len(nodes)
             print(
-                f"[PATCH] seed={patch_seed} patch_hops={args.patch_hops} "
+                f"patch_seed={patch_seed} patch_hops={args.patch_hops} "
                 f"minw={patch_minw} topk={patch_topk} added_nodes={after-before:,}"
             )
         else:
-            print(f"[PATCH] seed={patch_seed} not in seed_set; skip patch. (If desired, remove this check.)")
+            print(f"patch_seed={patch_seed} not in seed_set.")
 
     if len(nodes) > args.max_nodes:
         raise ValueError(
-            f"Node number {len(nodes)} exceeds max_nodes={args.max_nodes}. "
-            f"Try: increase --min-string-weight, set --hops 1, or reduce --topk-string-per-node."
+            f"node number {len(nodes)} exceeds max_nodes={args.max_nodes}. "
         )
 
     outdir.mkdir(parents=True, exist_ok=True)
@@ -325,11 +322,10 @@ def main():
         out_path=out_edges,
     )
 
-    print(f"[OK] wrote {out_nodes} nodes={len(nodes):,} seeds={len(seed_set):,}")
-    print(f"[OK] wrote {out_edges} edges={n_edges:,}")
-    print(f"[INFO] hops={args.hops} min_string_weight={args.min_string_weight} topk_string_per_node={args.topk_string_per_node} biogrid_physical_only={args.biogrid_physical_only}")
-    print(f"[INFO] seed_roles={seed_roles}")
-
+    print(f"wrote {out_nodes} nodes={len(nodes):,} seeds={len(seed_set):,}")
+    print(f"wrote {out_edges} edges={n_edges:,}")
+    print(f"hops={args.hops} min_string_weight={args.min_string_weight} topk_string_per_node={args.topk_string_per_node} biogrid_physical_only={args.biogrid_physical_only}")
+    print(f"seed_roles={seed_roles}")
 
 if __name__ == "__main__":
     main()

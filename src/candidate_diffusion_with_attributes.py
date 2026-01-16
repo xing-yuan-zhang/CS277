@@ -1,4 +1,4 @@
-# src/candidate_diffusion.py
+# src/candidate_diffusion_with_attributes.py
 from __future__ import annotations
 
 import argparse
@@ -166,6 +166,108 @@ def build_personalization(
     return personalization, sorted(set(active)), sorted(set(missing))
 
 
+
+def _as_bool(v) -> bool:
+    if v is None:
+        return False
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(int(v))
+    s = str(v).strip().lower()
+    return s in {"1", "true", "t", "yes", "y"}
+
+
+def compute_node_multipliers(
+    G: nx.Graph,
+    clip: Tuple[float, float] = (0.2, 5.0),
+    llps_mult: float = 1.2,
+    sh3_mult: float = 1.1,
+    prd_mult: float = 1.1,
+    motif_step: float = 0.10,
+    motif_cap: int = 5,
+    length_threshold: int = 800,
+    length_mult: float = 1.05,
+    llps_col: str = "is_LLPS_any",
+    sh3_col: str = "has_SH3",
+    prd_col: str = "has_PRD",
+    motif_col: str = "elm_sh3_related",
+    length_col: str = "length",
+) -> Dict[str, float]:
+    """
+    Incorporating node annotations into transition weights.
+    Implement a target-node multiplier m(v) and define directed edge weights:
+        w'(u->v) = w(u,v) * m(v)
+    Biases random walks to flow preferentially into nodes with LLPS/SH3/PRD evidence.
+    """
+    lo, hi = clip
+    mults: Dict[str, float] = {}
+    for n, d in G.nodes(data=True):
+        m = 1.0
+        try:
+            if int(float(d.get(llps_col, 0))) == 1:
+                m *= llps_mult
+        except Exception:
+            pass
+        if _as_bool(d.get(sh3_col, False)):
+            m *= sh3_mult
+        if _as_bool(d.get(prd_col, False)):
+            m *= prd_mult
+        # motif bonus
+        k = 0
+        try:
+            k = int(float(d.get(motif_col, 0)))
+        except Exception:
+            k = 0
+        if k > 0:
+            m *= (1.0 + motif_step * min(k, motif_cap))
+        # very weak length bonus
+        try:
+            L = float(d.get(length_col, 0))
+            if L >= length_threshold:
+                m *= length_mult
+        except Exception:
+            pass
+
+        if not (m > 0):
+            m = 1.0
+        m = max(lo, min(hi, m))
+        mults[str(n)] = float(m)
+    return mults
+
+
+def build_transition_graph_with_node_prior(
+    G: nx.Graph,
+    node_mult: Dict[str, float],
+    base_weight_attr: Optional[str],
+    out_weight_attr: str = "w_adj",
+) -> nx.DiGraph:
+    """
+    Convert an undirected graph G into a directed graph H with adjusted edge weights:
+        H[u->v].w_adj = G[u,v].base_weight * node_mult[v]
+    If base_weight_attr is None, base_weight is 1.0.
+    """
+    H = nx.DiGraph()
+    # copy nodes + attributes
+    for n, d in G.nodes(data=True):
+        H.add_node(str(n), **d)
+    for u, v, ed in G.edges(data=True):
+        u = str(u); v = str(v)
+        if base_weight_attr:
+            try:
+                w = float(ed.get(base_weight_attr, 1.0))
+            except Exception:
+                w = 1.0
+        else:
+            w = 1.0
+        mu = float(node_mult.get(u, 1.0))
+        mv = float(node_mult.get(v, 1.0))
+        # u -> v depends on target v
+        H.add_edge(u, v, **{out_weight_attr: w * mv})
+        H.add_edge(v, u, **{out_weight_attr: w * mu})
+    return H
+
+
 def run_ppr(
     G: nx.Graph,
     alpha: float,
@@ -298,6 +400,26 @@ def parse_args() -> argparse.Namespace:
                    help="Clip lower bound for seed_weight multiplier (safety).")
     p.add_argument("--seed_weight_clip_max", type=float, default=10.0,
                    help="Clip upper bound for seed_weight multiplier (safety).")
+    p.add_argument("--node_prior_mode", choices=["none", "target"], default="target",
+                   help="Incorporate node annotations into transition weights. "
+                        "'target' biases walks to flow into nodes with LLPS/SH3/PRD evidence; 'none' disables.")
+    p.add_argument("--node_prior_col", type=str, default="",
+                   help="Optional precomputed node attribute to use as multiplier (e.g., 'node_prior_mult'). "
+                        "If empty, multipliers are computed from annotation columns.")
+    p.add_argument("--node_prior_clip_min", type=float, default=0.2)
+    p.add_argument("--node_prior_clip_max", type=float, default=5.0)
+    p.add_argument("--node_prior_llps_mult", type=float, default=1.2)
+    p.add_argument("--node_prior_sh3_mult", type=float, default=1.1)
+    p.add_argument("--node_prior_prd_mult", type=float, default=1.1)
+    p.add_argument("--node_prior_motif_step", type=float, default=0.10)
+    p.add_argument("--node_prior_motif_cap", type=int, default=5)
+    p.add_argument("--node_prior_length_threshold", type=int, default=800)
+    p.add_argument("--node_prior_length_mult", type=float, default=1.05)
+    p.add_argument("--node_prior_llps_col", type=str, default="is_LLPS_any")
+    p.add_argument("--node_prior_sh3_col", type=str, default="has_SH3")
+    p.add_argument("--node_prior_prd_col", type=str, default="has_PRD")
+    p.add_argument("--node_prior_motif_col", type=str, default="elm_sh3_related")
+    p.add_argument("--node_prior_length_col", type=str, default="length")
     return p.parse_args()
 
 
@@ -356,6 +478,22 @@ def main() -> None:
         "seed_weight_col": (args.seed_weight_col.strip() if args.seed_weight_col is not None else None) or None,
         "seed_weight_clip_min": args.seed_weight_clip_min,
         "seed_weight_clip_max": args.seed_weight_clip_max,
+        "node_prior_mode": args.node_prior_mode,
+        "node_prior_col": (args.node_prior_col or "").strip() or None,
+        "node_prior_clip_min": args.node_prior_clip_min,
+        "node_prior_clip_max": args.node_prior_clip_max,
+        "node_prior_llps_mult": args.node_prior_llps_mult,
+        "node_prior_sh3_mult": args.node_prior_sh3_mult,
+        "node_prior_prd_mult": args.node_prior_prd_mult,
+        "node_prior_motif_step": args.node_prior_motif_step,
+        "node_prior_motif_cap": args.node_prior_motif_cap,
+        "node_prior_length_threshold": args.node_prior_length_threshold,
+        "node_prior_length_mult": args.node_prior_length_mult,
+        "node_prior_llps_col": args.node_prior_llps_col,
+        "node_prior_sh3_col": args.node_prior_sh3_col,
+        "node_prior_prd_col": args.node_prior_prd_col,
+        "node_prior_motif_col": args.node_prior_motif_col,
+        "node_prior_length_col": args.node_prior_length_col,
     }
     with open(os.path.join(outdir, "diffusion_config.json"), "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
@@ -364,15 +502,63 @@ def main() -> None:
     if weight_attr == "":
         weight_attr = None
 
+    diffusion_graph = G
+    diffusion_weight_attr = weight_attr
+
+    if args.node_prior_mode and args.node_prior_mode != "none":
+        # Build per-node multipliers m(v), then define directed edge weights:
+        # w'(u->v) = w(u,v) * m(v)
+        col = (args.node_prior_col or "").strip()
+        if col:
+            node_mult = {}
+            for n in diffusion_graph.nodes():
+                v = diffusion_graph.nodes[n].get(col, 1.0)
+                try:
+                    fv = float(v)
+                except Exception:
+                    fv = 1.0
+                node_mult[str(n)] = max(args.node_prior_clip_min, min(args.node_prior_clip_max, fv if fv > 0 else 1.0))
+        else:
+            node_mult = compute_node_multipliers(
+                diffusion_graph,
+                clip=(args.node_prior_clip_min, args.node_prior_clip_max),
+                llps_mult=args.node_prior_llps_mult,
+                sh3_mult=args.node_prior_sh3_mult,
+                prd_mult=args.node_prior_prd_mult,
+                motif_step=args.node_prior_motif_step,
+                motif_cap=args.node_prior_motif_cap,
+                length_threshold=args.node_prior_length_threshold,
+                length_mult=args.node_prior_length_mult,
+                llps_col=args.node_prior_llps_col,
+                sh3_col=args.node_prior_sh3_col,
+                prd_col=args.node_prior_prd_col,
+                motif_col=args.node_prior_motif_col,
+                length_col=args.node_prior_length_col,
+            )
+
+        top_mult = sorted(node_mult.items(), key=lambda kv: kv[1], reverse=True)[:20]
+        logger.info(
+            "Node multipliers enabled. Top multipliers: "
+            + ", ".join([f"{n}:{m:.3g}" for n, m in top_mult[:10]])
+        )
+
+        diffusion_graph = build_transition_graph_with_node_prior(
+            diffusion_graph,
+            node_mult=node_mult,
+            base_weight_attr=weight_attr,
+            out_weight_attr="w_adj",
+        )
+        diffusion_weight_attr = "w_adj"
+
     for a in args.alpha:
         if not (0.0 < a < 1.0):
             raise ValueError(f"alpha must be in (0,1), got {a}")
 
         scores = run_ppr(
-            G,
+            diffusion_graph,
             alpha=a,
             personalization=personalization,
-            weight_attr=weight_attr,
+            weight_attr=diffusion_weight_attr,
             max_iter=args.max_iter,
             tol=args.tol,
             logger=logger,

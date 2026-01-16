@@ -1,3 +1,5 @@
+# config/ppi_config.yaml
+
 organism:
   taxid: 9606
   name: human

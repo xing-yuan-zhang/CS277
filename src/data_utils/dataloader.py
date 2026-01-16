@@ -1,4 +1,4 @@
-# src/data_utils/fetch_string_biogrid_elm.py
+# src/data_utils/dataloader.py
 import argparse
 import os
 import sys
