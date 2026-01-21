@@ -138,7 +138,7 @@ def scan_filter_edges(
 
 def pick_seed_set(seeds_df: pd.DataFrame, seed_roles: list[str], allow_missing_role: bool) -> set[str]:
     if "entry" not in seeds_df.columns:
-        raise ValueError("seeds.mapped.tsv need entry column")
+        raise ValueError("need entry column")
 
     seeds_df = seeds_df.copy()
     seeds_df["entry"] = seeds_df["entry"].astype(str).str.strip()
@@ -146,7 +146,7 @@ def pick_seed_set(seeds_df: pd.DataFrame, seed_roles: list[str], allow_missing_r
     if "role" not in seeds_df.columns:
         if allow_missing_role:
             return set(seeds_df.dropna(subset=["entry"])["entry"].tolist())
-        raise ValueError("seeds.mapped.tsv has no role column")
+        raise ValueError()
 
     seeds_df["role"] = seeds_df["role"].astype(str).str.strip()
 
@@ -242,7 +242,7 @@ def main():
     seed_set = {x for x in seed_set if x and x.lower() != "nan"}
 
     if len(seed_set) == 0:
-        raise ValueError("no usable seed entries after role filtering.")
+        raise ValueError()
 
     n1 = scan_collect_neighbors(
         edges_path=edges_path,
@@ -263,8 +263,7 @@ def main():
         )
         nodes |= set(n2)
 
-    # local patch for a specific seed with fixed 2-hop expansion
-    # patch only if the seed is in the original seed set and is biologically validated
+    # local patch for a specific seed with fixed 2-hop expansion, patch only if the seed is in the original seed set and is biologically validated
     patch_seed = str(args.patch_seed).strip()
     if patch_seed and patch_seed.lower() != "none":
         patch_minw = args.min_string_weight if args.patch_min_string_weight is None else float(args.patch_min_string_weight)

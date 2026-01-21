@@ -24,16 +24,14 @@ def iter_sec2pri_from_dat_gz(dat_gz: Path):
                 primary = None
                 secs = []
 
-def main():
-    root = Path(__file__).resolve().parents[2]
-    raw = root / "inputs" / "ppi" / "UniProt" / "raw"
-    out = root / "inputs" / "ppi" / "UniProt" / "uniprot_sec2pri_9606.tsv"
+def main(raw, out):
     out.parent.mkdir(parents=True, exist_ok=True)
 
     files = [
         raw / "uniprot_sprot_human.dat.gz",
         raw / "uniprot_trembl_human.dat.gz",
     ]
+    
     for p in files:
         if not p.exists():
             raise FileNotFoundError(f"missing: {p}")
@@ -51,5 +49,9 @@ def main():
 
     print(f"wrote {out} rows={len(seen):,}")
 
+ROOT = Path(__file__).resolve().parents[2]
+raw = ROOT / "inputs" / "ppi" / "UniProt" / "raw"
+out = ROOT / "inputs" / "ppi" / "UniProt" / "uniprot_sec2pri_9606.tsv"
+
 if __name__ == "__main__":
-    main()
+    main(raw, out)

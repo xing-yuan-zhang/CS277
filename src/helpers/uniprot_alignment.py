@@ -1,4 +1,4 @@
-# src/helpers/uniprot_search.py
+# src/helpers/uniprot_alignment.py
 import time
 import pandas as pd
 import requests

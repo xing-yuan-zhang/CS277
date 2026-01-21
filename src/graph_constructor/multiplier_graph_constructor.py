@@ -1,4 +1,4 @@
-# src/graph_constructor/build_graph_with_multiplier.py
+# src/graph_constructor/multiplier_graph_constructor.py
 from __future__ import annotations
 from pathlib import Path
 import argparse

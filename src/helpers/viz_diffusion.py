@@ -1,3 +1,4 @@
+# src/helpers/viz_diffusion.py
 import argparse
 import pickle
 from collections import deque

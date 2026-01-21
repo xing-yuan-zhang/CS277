@@ -13,23 +13,6 @@ import requests
 import yaml
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[2]
-
-SEEDS = str(ROOT / "inputs/seeds/seeds.init.tsv")
-ATTR = Path(ROOT / "inputs/annotations/nodes.attributes.tsv")
-OUT = Path(ROOT / "inputs/seeds/seeds.mapped.tsv")
-
-UNIPROT_RE = re.compile(
-    r"""
-    \b(
-        [A-NR-Z][0-9][A-Z0-9]{3}[0-9]
-      | [OPQ][0-9][A-Z0-9]{3}[0-9]
-      | A0A[0-9A-Z]{7}
-    )\b
-    """,
-    re.VERBOSE
-)
-
 def seed_map_main(seeds_path: Optional[str] = None, attr_path: Optional[str] = None, out_path: Optional[str] = None) -> None:
     seeds_path = seeds_path or SEEDS
     attr_path = attr_path or str(ATTR)
@@ -40,12 +23,12 @@ def seed_map_main(seeds_path: Optional[str] = None, attr_path: Optional[str] = N
 
     s = pd.read_csv(seeds_path, sep="\t")
     if "query" not in s.columns:
-        raise ValueError("seeds.tsv need query column")
+        raise ValueError()
     s["query"] = s["query"].astype(str).str.strip()
 
     attr = pd.read_csv(attr_path, sep="\t")
     if not {"entry", "gene_symbol"}.issubset(set(attr.columns)):
-        raise ValueError("nodes.attributes.tsv need entry and gene_symbol columns")
+        raise ValueError()
 
     m = attr.dropna(subset=["gene_symbol"]).copy()
     m["gene_symbol"] = m["gene_symbol"].astype(str).str.upper()
@@ -66,9 +49,9 @@ def seed_map_main(seeds_path: Optional[str] = None, attr_path: Optional[str] = N
     out = pd.DataFrame(out_rows)
     out.to_csv(out_p, sep="\t", index=False)
     missing = out["entry"].isna().sum()
-    print(f"[OK] wrote {out_p} seeds={len(out)} missing={missing}")
+    print(f"wrote {out_p} seeds={len(out)} missing={missing}")
     if missing > 0:
-        print("[WARN] some seeds not mapped to UniProt entries.")
+        print("seeds not mapped to UniProt entries")
 
 @dataclass
 class UniProtClientConfig:
@@ -309,7 +292,7 @@ def pick_best_uniprot_hit(query: str, hits: list[dict]) -> dict | None:
 def write_tsv(path: str, rows: List[Dict[str, Any]]) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if not rows:
-        raise ValueError("No rows to write.")
+        raise ValueError()
     cols = list(rows[0].keys())
     with open(path, "w", encoding="utf-8") as f:
         f.write("\t".join(cols) + "\n")
@@ -458,6 +441,23 @@ def main() -> None:
         return
 
     raise SystemExit(f"err: {args.cmd}")
+
+ROOT = Path(__file__).resolve().parents[2]
+
+SEEDS = str(ROOT / "inputs/seeds/seeds.init.tsv")
+ATTR = Path(ROOT / "inputs/annotations/nodes.attributes.tsv")
+OUT = Path(ROOT / "inputs/seeds/seeds.mapped.tsv")
+
+UNIPROT_RE = re.compile(
+    r"""
+    \b(
+        [A-NR-Z][0-9][A-Z0-9]{3}[0-9]
+      | [OPQ][0-9][A-Z0-9]{3}[0-9]
+      | A0A[0-9A-Z]{7}
+    )\b
+    """,
+    re.VERBOSE
+)
 
 if __name__ == "__main__":
     main()

@@ -1,4 +1,4 @@
-# src/graph_constructor/merge_attributes.py
+# src/graph_constructor/merge_curvature_attributes.py
 from __future__ import annotations
 
 import argparse
@@ -364,9 +364,19 @@ def build_subgraph_node_attributes(
             if sh3_cnt is not None:
                 out = out.merge(sh3_cnt, on="entry", how="left")
 
-            out["elm_total"] = pd.to_numeric(out.get("elm_total_new", 0), errors="coerce").fillna(0).astype(int)
-            out["elm_sh3_related"] = pd.to_numeric(out.get("elm_sh3_related_new", 0), errors="coerce").fillna(0).astype(int)
+            out["elm_total"] = (
+                pd.to_numeric(out.get("elm_total_new", pd.Series(0, index=out.index)),
+                            errors="coerce")
+                .fillna(0)
+                .astype(int)
+            )
 
+            out["elm_sh3_related"] = (
+                pd.to_numeric(out.get("elm_sh3_related_new", pd.Series(0, index=out.index)),
+                            errors="coerce")
+                .fillna(0)
+                .astype(int)
+)
             for c in ["elm_total_new", "elm_sh3_related_new"]:
                 if c in out.columns:
                     out = out.drop(columns=[c])

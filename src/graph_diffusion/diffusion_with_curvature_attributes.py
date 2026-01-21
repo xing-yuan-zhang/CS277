@@ -1,4 +1,4 @@
-# src/candidate_diffusion_with_attributes.py
+# src/graph_diffusion/diffusion_with_curvature_attributes.py
 from __future__ import annotations
 
 import argparse

@@ -1,13 +1,10 @@
 # src/data_utils/dataloader.py
 import argparse
-import os
-import sys
 import hashlib
 import requests
 from pathlib import Path
 
 CHUNK = 1024 * 1024
-
 
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
@@ -15,7 +12,6 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: f.read(CHUNK), b""):
             h.update(chunk)
     return h.hexdigest()
-
 
 def download(url: str, out: Path, overwrite: bool = False, timeout: int = 60) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -30,7 +26,6 @@ def download(url: str, out: Path, overwrite: bool = False, timeout: int = 60) ->
     if resume_from > 0:
         headers["Range"] = f"bytes={resume_from}-"
 
-    print(f"[dl] {url}")
     with requests.get(url, stream=True, headers=headers, timeout=timeout) as r:
         r.raise_for_status()
         mode = "ab" if resume_from > 0 else "wb"
@@ -40,12 +35,11 @@ def download(url: str, out: Path, overwrite: bool = False, timeout: int = 60) ->
                     f.write(chunk)
 
     tmp.replace(out)
-    print(f"[ok] -> {out} ({out.stat().st_size/1e6:.2f} MB)")
-
+    print(f"{out} ({out.stat().st_size/1e6:.2f} MB)")
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", default=".", help="physeval root (default: .)")
+    ap.add_argument("--root", default=".")
     ap.add_argument("--string-version", default="v12.0")
     ap.add_argument("--taxid", default="9606")
     ap.add_argument("--with-biogrid", action="store_true")
@@ -53,11 +47,10 @@ def main():
     ap.add_argument("--overwrite", action="store_true")
     args = ap.parse_args()
 
-    root = Path(args.root).resolve()
-
     base = f"https://stringdb-downloads.org/download"
+    ROOT = Path(args.root).resolve()
+    string_out = ROOT / "inputs" / "ppi" / "STRING" / args.string_version
 
-    string_out = root / "inputs" / "ppi" / "STRING" / args.string_version
     files = [
         f"{args.taxid}.protein.links.detailed.{args.string_version}.txt.gz",
         f"{args.taxid}.protein.aliases.{args.string_version}.txt.gz",
@@ -72,10 +65,10 @@ def main():
         try:
             download(url, out, overwrite=args.overwrite)
         except Exception as e:
-            print(f"[warn] STRING failed: {fn}: {e}")
+            print(f"STRING failed: {fn}: {e}")
 
     if args.with_biogrid:
-        biogrid_out = root / "inputs" / "ppi" / "BioGRID"
+        biogrid_out = ROOT / "inputs" / "ppi" / "BioGRID"
         biogrid_base = "https://downloads.thebiogrid.org/BioGRID/Latest-Release"
         biogrid_files = [
             "BIOGRID-ALL-LATEST.mitab.zip",
@@ -87,16 +80,16 @@ def main():
             try:
                 download(url, out, overwrite=args.overwrite)
             except Exception as e:
-                print(f"[warn] BioGRID failed: {fn}: {e}")
+                print(f"BioGRID failed: {fn}: {e}")
 
     if args.with_elm:
-        elm_out = root / "inputs" / "annotations" / "motifs" / "ELM"
+        elm_out = ROOT / "inputs" / "annotations" / "motifs" / "ELM"
         elm_url = "http://elm.eu.org/instances.tsv?q=None&taxon=Homo%20sapiens&instance_logic=true%20positive"
         out = elm_out / "ELM_instances_human_true_positive.tsv"
         try:
             download(elm_url, out, overwrite=args.overwrite)
         except Exception as e:
-            print(f"[warn] ELM failed: {e}")
+            print(f"ELM failed: {e}")
 
 
 if __name__ == "__main__":

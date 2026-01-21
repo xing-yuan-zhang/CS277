@@ -5,23 +5,13 @@ import re
 from pathlib import Path
 import pandas as pd
 import requests
-
-UNIPROT_RE = re.compile(
-    r"""
-    \b(
-        [A-NR-Z][0-9][A-Z0-9]{3}[0-9]
-      | [OPQ][0-9][A-Z0-9]{3}[0-9]
-      | A0A[0-9A-Z]{7}
-    )\b
-    """,
-    re.VERBOSE
-)
+from typing import Any, cast
 
 def read_gz_tsv(path, sep="\t", **kwargs):
     default_kwargs = dict(sep=sep, dtype=str, low_memory=False, on_bad_lines="skip")
     default_kwargs.update(kwargs)
     with gzip.open(path, "rt", encoding="utf-8", errors="replace", newline="") as f:
-        return pd.read_csv(f, **default_kwargs)
+        return pd.read_csv(f, **cast(dict[str, Any], default_kwargs))
 
 def read_gz_space(path: Path) -> pd.DataFrame:
     with gzip.open(path, "rt") as f:
@@ -79,7 +69,7 @@ def preprocess_string(root: Path, string_version: str, taxid: str, outdir: Path)
     df = read_gz_space(detailed)
     p1, p2 = df.columns[0], df.columns[1]
     if "combined_score" not in df.columns:
-        raise ValueError(f"combined_score not in columns: {list(df.columns)}")
+        raise ValueError()
 
     keep_cols = [p1, p2, "combined_score"]
     for c in ["neighborhood", "fusion", "cooccurence", "coexpression", "experimental", "database", "textmining"]:
@@ -102,14 +92,13 @@ def preprocess_string(root: Path, string_version: str, taxid: str, outdir: Path)
 def preprocess_biogrid(root: Path, outdir: Path) -> None:
     biogrid_zip = root / "inputs" / "ppi" / "BioGRID" / "BIOGRID-ALL-LATEST.mitab.zip"
     if not biogrid_zip.exists():
-        print("BioGRID not found: ", biogrid_zip)
         return
     import zipfile
     with zipfile.ZipFile(biogrid_zip, "r") as z:
         names = z.namelist()
         txts = [n for n in names if n.endswith(".txt")]
         if not txts:
-            raise ValueError("BioGRID mitab zip empty")
+            raise ValueError()
         mitab_name = txts[0]
         with z.open(mitab_name) as f:
             df = pd.read_csv(f, sep="\t", header=0, low_memory=False)
@@ -120,7 +109,7 @@ def preprocess_biogrid(root: Path, outdir: Path) -> None:
     col_tax_a = next((c for c in df.columns if c == "Taxid Interactor A"), None)
     col_tax_b = next((c for c in df.columns if c == "Taxid Interactor B"), None)
     if not all([col_alt_a, col_alt_b, col_tax_a, col_tax_b]):
-        raise ValueError("MITAB header columns depreciated. " f"Found columns: {list(df.columns)[:15]} ...")
+        raise ValueError("MITAB header columns depreciated.")
 
     tax_a = df[col_tax_a].astype(str)
     tax_b = df[col_tax_b].astype(str)
@@ -139,7 +128,7 @@ def preprocess_biogrid(root: Path, outdir: Path) -> None:
     out = pd.DataFrame({"a": a[is_human], "b": b[is_human]}).dropna()
     out = out[out["a"].str.contains("uniprotkb:", na=False) & out["b"].str.contains("uniprotkb:", na=False)]
     out.to_csv(outdir / "biogrid_human_edges.tsv", sep="\t", index=False)
-    print(f"BioGRID human edges={len(out):,}")
+    print(f"BioGRID: edges={len(out):,}")
 
 def _strip_isoform(acc: str) -> str:
     s = str(acc).strip()
@@ -164,13 +153,7 @@ def download_uniprot_sec2pri(taxid: str, out_path: Path, force: bool = False, re
     if reviewed_only:
         q = f"{q} AND (reviewed:true)"
 
-    fields_try = [
-        "accession,sec_acc",
-        "accession,secondary_accession",
-        "accession,secondary_accessions",
-        "accession,secondaryAccession",
-    ]
-
+    fields_try = ["accession,sec_acc", "accession,secondary_accession", "accession,secondary_accessions", "accession,secondaryAccession"]
     last_err = None
     text = None
     used_fields = None
@@ -192,12 +175,12 @@ def download_uniprot_sec2pri(taxid: str, out_path: Path, force: bool = False, re
             last_err = repr(e)
 
     if text is None:
-        raise RuntimeError(f"UniProt download failed. Last error: {last_err}")
+        raise RuntimeError()
 
     lines = text.splitlines()
     header = lines[0].split("\t")
     if len(header) < 2:
-        raise RuntimeError(f"Unexpected UniProt TSV header: {header}")
+        raise RuntimeError(f"Unexpected header")
 
     primary_col = header[0]
     sec_col = header[1]
@@ -221,7 +204,7 @@ def download_uniprot_sec2pri(taxid: str, out_path: Path, force: bool = False, re
 
     df = pd.DataFrame(rows, columns=["secondary", "primary"]).drop_duplicates()
     df.to_csv(out_path, sep="\t", index=False)
-    print(f"[OK] downloaded UniProt sec2pri map taxid={taxid} reviewed_only={reviewed_only} fields={used_fields} rows={len(df):,} -> {out_path}")
+    print(f"UniProt sec2pri map: taxid={taxid} reviewed_only={reviewed_only} fields={used_fields} rows={len(df):,} -> {out_path}")
 
 def normalize_uniprot_series(s: pd.Series, sec2pri: dict[str, str]) -> pd.Series:
     x = s.astype(str).map(_strip_isoform)
@@ -249,14 +232,14 @@ def merge_edges(root: Path, string_version: str, taxid: str, uniprot_sec2pri_pat
 
     se = pd.read_csv(string_edges, sep="\t")
     if not {"node_a", "node_b"}.issubset(set(se.columns)):
-        raise ValueError("need node_a/node_b columns")
+        raise ValueError()
     se["entry_a"] = se["node_a"].map(s2u_map)
     se["entry_b"] = se["node_b"].map(s2u_map)
     se = se.dropna(subset=["entry_a", "entry_b"]).copy()
     se = se[se["entry_a"] != se["entry_b"]].copy()
 
     if "combined_score" not in se.columns:
-        raise ValueError("need combined_score column")
+        raise ValueError()
     se["string_score"] = pd.to_numeric(se["combined_score"], errors="coerce")
     se = se.dropna(subset=["string_score"]).copy()
     se["weight"] = se["string_score"] / 1000.0
@@ -265,7 +248,7 @@ def merge_edges(root: Path, string_version: str, taxid: str, uniprot_sec2pri_pat
     keep_cols = ["entry_a", "entry_b", "weight", "string_score", "is_string", "is_biogrid"]
     se = se[keep_cols]
 
-    print("STRING mapped edges total:", len(se))
+    print("STRING mapped edges:", len(se))
 
     if biogrid_edges.exists():
         bg = pd.read_csv(biogrid_edges, sep="\t")
@@ -275,13 +258,15 @@ def merge_edges(root: Path, string_version: str, taxid: str, uniprot_sec2pri_pat
         bg["entry_b"] = bg["b"].map(extract_uniprot_from_biogrid_field)
         bg = bg.dropna(subset=["entry_a", "entry_b"]).copy()
         bg = bg[bg["entry_a"] != bg["entry_b"]].copy()
-        bg["weight"] = 0.57  # assign medpoint weight
+
+        bg["weight"] = 0.57  # use STRING medpoint weight for BioGRID edges
+
         bg["string_score"] = pd.NA
         bg["is_string"] = 0
         bg["is_biogrid"] = 1
         bg = bg[keep_cols]
         merged = pd.concat([se, bg], ignore_index=True)
-        print(f"BioGRID human edges={len(bg):,}")
+        print(f"BioGRID edges: {len(bg):,}")
     else:
         merged = se
 
@@ -311,10 +296,6 @@ def merge_edges(root: Path, string_version: str, taxid: str, uniprot_sec2pri_pat
     )
     out.to_csv(out_merged, sep="\t", index=False)
 
-    print(f"[OK] wrote {out_merged} edges={len(out):,}")
-    print(f"[OK] wrote {out_map} mappings={len(s2u):,}")
-    print(f"[OK] loaded sec2pri mappings={len(sec2pri):,} from {uniprot_sec2pri_path}")
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=".")
@@ -326,39 +307,47 @@ def main():
     ap.add_argument("--uniprot-reviewed-only", action="store_true")
     args = ap.parse_args()
 
-    root = Path(__file__).resolve().parents[2]
+    ROOT = Path(__file__).resolve().parents[2]
 
-    outdir_string = root / "inputs" / "ppi" / "STRING" / args.string_version
-    outdir_biogrid = root / "inputs" / "ppi" / "BioGRID"
+    outdir_string = ROOT / "inputs" / "ppi" / "STRING" / args.string_version
+    outdir_biogrid = ROOT / "inputs" / "ppi" / "BioGRID"
     outdir_string.mkdir(parents=True, exist_ok=True)
     outdir_biogrid.mkdir(parents=True, exist_ok=True)
 
-    uniprot_sec2pri_path = root / "inputs" / "ppi" / "UniProt" / f"uniprot_sec2pri_{args.taxid}.tsv"
-
+    uniprot_sec2pri_path = ROOT / "inputs" / "ppi" / "UniProt" / f"uniprot_sec2pri_{args.taxid}.tsv"
     if args.merge_only:
         merge_edges(
-            root=root,
+            root=ROOT,
             string_version=args.string_version,
             taxid=args.taxid,
             uniprot_sec2pri_path=uniprot_sec2pri_path,
             refresh_uniprot_sec2pri=args.refresh_uniprot_sec2pri,
             reviewed_only=args.uniprot_reviewed_only,
         )
-        print("[done]")
         return
 
-    preprocess_string(root, args.string_version, args.taxid, outdir_string)
-    preprocess_biogrid(root, outdir_biogrid)
+    preprocess_string(ROOT, args.string_version, args.taxid, outdir_string)
+    preprocess_biogrid(ROOT, outdir_biogrid)
     if not args.preprocess_only:
         merge_edges(
-            root=root,
+            root=ROOT,
             string_version=args.string_version,
             taxid=args.taxid,
             uniprot_sec2pri_path=uniprot_sec2pri_path,
             refresh_uniprot_sec2pri=args.refresh_uniprot_sec2pri,
             reviewed_only=args.uniprot_reviewed_only,
         )
-    print("[done]")
+
+UNIPROT_RE = re.compile(
+    r"""
+    \b(
+        [A-NR-Z][0-9][A-Z0-9]{3}[0-9]
+      | [OPQ][0-9][A-Z0-9]{3}[0-9]
+      | A0A[0-9A-Z]{7}
+    )\b
+    """,
+    re.VERBOSE
+)
 
 if __name__ == "__main__":
     main()
