@@ -1,18 +1,109 @@
-# src/helpers/viz_diffusion.py
+# src/helpers/params_diffusion.py
 import argparse
+import time
 import pickle
 from collections import deque
+from io import StringIO
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import networkx as nx
 import matplotlib.pyplot as plt
+import requests
 
+API = "https://rest.uniprot.org"
+
+def clean_node_series(s: pd.Series) -> pd.Series:
+    return (
+        s.astype(str)
+        .str.strip()
+        .str.split("-").str[0]
+        .str.split(".").str[0]
+    )
+
+def submit_mapping_job(acc_list):
+    r = requests.post(
+        f"{API}/idmapping/run",
+        data={"from": "UniProtKB_AC-ID", "to": "UniProtKB", "ids": ",".join(acc_list)},
+        timeout=60
+    )
+    r.raise_for_status()
+    return r.json()["jobId"]
+
+def wait_for_job(job_id, sleep_s=1.5):
+    while True:
+        s = requests.get(f"{API}/idmapping/status/{job_id}", timeout=60)
+        s.raise_for_status()
+        js = s.json()
+        if js.get("jobStatus") in ("NEW", "RUNNING"):
+            time.sleep(sleep_s)
+            continue
+        return js
+
+def fetch_all_results_tsv(job_id, fields="accession,gene_primary,protein_name"):
+    url = f"{API}/idmapping/uniprotkb/results/{job_id}"
+    params = {"format": "tsv", "fields": fields}
+    chunks = []
+    first_page = True
+    while url:
+        r = requests.get(url, params=params if first_page else None, timeout=120)
+        r.raise_for_status()
+        text = r.text
+        if first_page:
+            chunks.append(text)
+            first_page = False
+        else:
+            lines = text.splitlines()
+            if len(lines) > 1:
+                chunks.append("\n".join(lines[1:]) + "\n")
+        url = r.links.get("next", {}).get("url")
+    return "".join(chunks)
+
+def parse_mapping_tsv(tsv_text: str) -> pd.DataFrame:
+    df = pd.read_csv(StringIO(tsv_text), sep="\t")
+    rename = {}
+    for c in df.columns:
+        lc = c.lower()
+        if lc in ("entry", "accession"):
+            rename[c] = "accession"
+        elif "gene names" in lc and "primary" in lc:
+            rename[c] = "gene_symbol"
+        elif "protein" in lc and "name" in lc:
+            rename[c] = "protein_name"
+        elif "gene" in lc and "primary" in lc:
+            rename[c] = "gene_symbol"
+    df = df.rename(columns=rename)
+    keep = [c for c in ["accession", "gene_symbol", "protein_name"] if c in df.columns]
+    df = df[keep].drop_duplicates("accession")
+    return df
+
+def fetch_uniprot_names(accessions, batch_size=500) -> pd.DataFrame:
+    acc_raw = pd.Series(accessions)
+    acc_clean = clean_node_series(acc_raw)
+    acc_list = []
+    seen = set()
+    for x in acc_clean.tolist():
+        if not x or str(x).lower() == "nan":
+            continue
+        if x not in seen:
+            acc_list.append(x)
+            seen.add(x)
+    rows = []
+    for i in range(0, len(acc_list), batch_size):
+        batch = acc_list[i:i + batch_size]
+        job_id = submit_mapping_job(batch)
+        wait_for_job(job_id)
+        tsv = fetch_all_results_tsv(job_id, fields="accession,gene_primary,protein_name")
+        df_map = parse_mapping_tsv(tsv)
+        rows.append(df_map)
+    if not rows:
+        return pd.DataFrame(columns=["accession", "gene_symbol", "protein_name"])
+    out = pd.concat(rows, ignore_index=True).drop_duplicates("accession")
+    return out
 
 def ensure_outdir(outdir: Path):
     outdir.mkdir(parents=True, exist_ok=True)
-
 
 def load_graph(edges_tsv: Path, pkl_graph: Path | None) -> nx.Graph:
     if pkl_graph is not None and pkl_graph.exists():
@@ -35,7 +126,6 @@ def load_graph(edges_tsv: Path, pkl_graph: Path | None) -> nx.Graph:
         g.add_edge(str(a), str(b), weight=w)
     return g
 
-
 def multi_source_hops(g: nx.Graph, seeds: list[str], cutoff: int | None = None) -> dict[str, int]:
     hops = {}
     dq = deque()
@@ -53,7 +143,6 @@ def multi_source_hops(g: nx.Graph, seeds: list[str], cutoff: int | None = None) 
                 dq.append(v)
     return hops
 
-
 def build_rank_map(diff_df: pd.DataFrame) -> dict[str, int]:
     d = diff_df[["node", "score"]].copy()
     d["node"] = d["node"].astype(str).str.strip()
@@ -63,16 +152,10 @@ def build_rank_map(diff_df: pd.DataFrame) -> dict[str, int]:
     d["node_key"] = d["node"].str.split("-").str[0]
     return dict(zip(d["node_key"], d["rank"]))
 
-
 def node_key(x: str) -> str:
     return str(x).strip().split("-")[0]
 
-
-def viz_colors_by_rank(
-    g: nx.Graph,
-    rank_map: dict[str, int],
-    is_seed_map: dict[str, int],
-):
+def viz_colors_by_rank(g: nx.Graph, rank_map: dict[str, int], is_seed_map: dict[str, int]):
     cmap = plt.cm.Blues
     color_seed = "red"
     color_top50 = cmap(0.90)
@@ -80,7 +163,6 @@ def viz_colors_by_rank(
     color_100_200 = cmap(0.50)
     color_200_plus = cmap(0.30)
     color_unknown = "lightgray"
-
     node_colors = []
     for n in g.nodes():
         if int(is_seed_map.get(n, 0)) == 1:
@@ -99,32 +181,20 @@ def viz_colors_by_rank(
                 node_colors.append(color_200_plus)
     return node_colors
 
-
-def plot_hop_subgraph_structure_rank_shaded(
-    g: nx.Graph,
-    nodes_df: pd.DataFrame,
-    hops: dict[str, int],
-    rank_map: dict[str, int],
-    outdir: Path,
-    max_hop: int = 2,
-    layout_seed: int = 42,
-):
+def plot_hop_subgraph_structure_rank_shaded(g: nx.Graph, nodes_df: pd.DataFrame, hops: dict[str, int], rank_map: dict[str, int], outdir: Path, max_hop: int = 2, layout_seed: int = 42):
     is_seed_map = dict(zip(nodes_df["entry"].astype(str), nodes_df["is_seed"].astype(int)))
     keep = [n for n, h in hops.items() if h <= max_hop]
     sg = g.subgraph(keep).copy()
     if sg.number_of_nodes() == 0:
         raise ValueError("Empty hop subgraph for chosen cutoff")
-
     pos = nx.spring_layout(sg, seed=layout_seed, weight="weight", k=0.5)
     node_colors = viz_colors_by_rank(sg, rank_map, is_seed_map)
-
     w = np.array([sg[u][v].get("weight", 1.0) for u, v in sg.edges()], dtype=float)
     if len(w) == 0:
         widths = []
     else:
         wmin, wmax = float(np.min(w)), float(np.max(w))
         widths = (0.2 + 2.2 * (w - wmin) / (wmax - wmin)) if wmax > wmin else np.full_like(w, 0.8, dtype=float)
-
     plt.figure(figsize=(10, 10))
     nx.draw_networkx_nodes(sg, pos, node_color=node_colors, node_size=30, alpha=0.85, linewidths=0.0)
     nx.draw_networkx_edges(sg, pos, width=widths, alpha=0.25)
@@ -133,7 +203,6 @@ def plot_hop_subgraph_structure_rank_shaded(
     plt.tight_layout()
     plt.savefig(outdir / "fig1_hop_subgraph_rank_shaded.png", dpi=300)
     plt.close()
-
 
 def plot_rank_score_curve(diff_df: pd.DataFrame, outdir: Path):
     d = diff_df.sort_values("score", ascending=False).reset_index(drop=True).copy()
@@ -149,7 +218,6 @@ def plot_rank_score_curve(diff_df: pd.DataFrame, outdir: Path):
     plt.tight_layout()
     plt.savefig(outdir / "fig2_rank_score_log.png", dpi=300)
     plt.close()
-
 
 def plot_score_vs_hop_boxplot(diff_df: pd.DataFrame, hops: dict[str, int], outdir: Path, max_hop_show: int = 4):
     d = diff_df.copy()
@@ -174,45 +242,30 @@ def plot_score_vs_hop_boxplot(diff_df: pd.DataFrame, hops: dict[str, int], outdi
     plt.savefig(outdir / "fig3_score_vs_hop_boxplot.png", dpi=300)
     plt.close()
 
-
-def plot_top50_induced_with_bold_gene_labels(
-    g: nx.Graph,
-    nodes_df: pd.DataFrame,
-    diff_df: pd.DataFrame,
-    outdir: Path,
-    topn: int = 50,
-    layout_seed: int = 42,
-):
+def plot_top50_induced_with_bold_gene_labels(g: nx.Graph, nodes_df: pd.DataFrame, diff_df: pd.DataFrame, outdir: Path, topn: int = 50, layout_seed: int = 42):
     nodes_df = nodes_df.copy()
     nodes_df["entry"] = nodes_df["entry"].astype(str)
-
     d = diff_df[["node", "score"]].copy()
     d["node"] = d["node"].astype(str)
     d["score"] = pd.to_numeric(d["score"], errors="coerce")
     d = d.dropna(subset=["score"]).sort_values("score", ascending=False).head(topn)
-
     top_nodes = d["node"].tolist()
     sg = g.subgraph(top_nodes).copy()
     if sg.number_of_nodes() == 0:
         raise ValueError("Empty induced subgraph for top nodes")
-
     score_map = dict(zip(d["node"], d["score"]))
     scores = np.array([float(score_map.get(n, 0.0)) for n in sg.nodes()], dtype=float)
     smax = float(np.max(scores)) if len(scores) else 1.0
     sizes = 120 + 2600 * (scores / smax if smax > 0 else scores)
-
     is_seed_map = dict(zip(nodes_df["entry"], nodes_df["is_seed"].astype(int)))
     colors = ["tab:red" if int(is_seed_map.get(n, 0)) == 1 else "tab:blue" for n in sg.nodes()]
-
     pos = nx.spring_layout(sg, seed=layout_seed, weight="weight")
-
     w = np.array([sg[u][v].get("weight", 1.0) for u, v in sg.edges()], dtype=float)
     if len(w) == 0:
         widths = []
     else:
         wmin, wmax = float(np.min(w)), float(np.max(w))
         widths = (0.3 + 2.7 * (w - wmin) / (wmax - wmin)) if wmax > wmin else np.full_like(w, 0.9, dtype=float)
-
     meta = nodes_df.set_index("entry", drop=False)
     labels = {}
     for n in sg.nodes():
@@ -227,7 +280,6 @@ def plot_top50_induced_with_bold_gene_labels(
                 labels[n] = n
         else:
             labels[n] = n
-
     plt.figure(figsize=(11, 9))
     nx.draw_networkx_edges(sg, pos, alpha=0.35, width=widths)
     nx.draw_networkx_nodes(sg, pos, node_color=colors, node_size=sizes, linewidths=0.0)
@@ -238,26 +290,16 @@ def plot_top50_induced_with_bold_gene_labels(
     plt.savefig(outdir / "fig4_top50_induced_bold_labels.png", dpi=300)
     plt.close()
 
-
-def plot_top50_induced_small_nodes_edges_shaded(
-    g: nx.Graph,
-    diff_df: pd.DataFrame,
-    outdir: Path,
-    topn: int = 50,
-    layout_seed: int = 42,
-):
+def plot_top50_induced_small_nodes_edges_shaded(g: nx.Graph, diff_df: pd.DataFrame, outdir: Path, topn: int = 50, layout_seed: int = 42):
     d = diff_df[["node", "score"]].copy()
     d["node"] = d["node"].astype(str)
     d["score"] = pd.to_numeric(d["score"], errors="coerce")
     d = d.dropna(subset=["score"]).sort_values("score", ascending=False).head(topn)
-
     top_nodes = d["node"].tolist()
     sg = g.subgraph(top_nodes).copy()
     if sg.number_of_nodes() == 0:
         raise ValueError("Empty induced subgraph for top nodes")
-
     pos = nx.spring_layout(sg, seed=layout_seed, weight="weight")
-
     edges = list(sg.edges())
     ew = np.array([sg[u][v].get("weight", 1.0) for u, v in edges], dtype=float)
     if len(edges) > 0:
@@ -272,12 +314,10 @@ def plot_top50_induced_small_nodes_edges_shaded(
     else:
         ecolors = []
         ewidths = []
-
     score_map = dict(zip(d["node"], d["score"]))
     ns = np.array([float(score_map.get(n, 0.0)) for n in sg.nodes()], dtype=float)
     smax = float(np.max(ns)) if len(ns) else 1.0
     node_colors = [plt.cm.Blues(0.25 + 0.70 * float(x / smax)) if smax > 0 else plt.cm.Blues(0.25) for x in ns]
-
     plt.figure(figsize=(10, 10))
     nx.draw_networkx_edges(sg, pos, edgelist=edges, edge_color=ecolors, width=ewidths, alpha=0.9)
     nx.draw_networkx_nodes(sg, pos, node_color=node_colors, node_size=18, linewidths=0.0, alpha=0.95)
@@ -287,13 +327,7 @@ def plot_top50_induced_small_nodes_edges_shaded(
     plt.savefig(outdir / "fig4b_top50_induced_small_nodes_edges_shaded.png", dpi=300)
     plt.close()
 
-
-def plot_topk_annotation_heatmap(
-    nodes_df: pd.DataFrame,
-    diff_df: pd.DataFrame,
-    outdir: Path,
-    topk: int = 50,
-):
+def plot_topk_annotation_heatmap(nodes_df: pd.DataFrame, diff_df: pd.DataFrame, outdir: Path, topk: int = 50):
     d = diff_df.sort_values("score", ascending=False).head(topk).copy()
     n = nodes_df.copy()
     n["entry"] = n["entry"].astype(str)
@@ -340,7 +374,6 @@ def plot_topk_annotation_heatmap(
         raise ValueError("No annotation columns available for heatmap")
 
     X = np.vstack(mat).T
-
     plt.figure(figsize=(min(12, 0.8 * len(colnames) + 4), 0.22 * len(labels) + 3))
     plt.imshow(X, aspect="auto", interpolation="nearest")
     plt.xticks(np.arange(len(colnames)), colnames, rotation=45, ha="right")
@@ -351,7 +384,6 @@ def plot_topk_annotation_heatmap(
     plt.tight_layout()
     plt.savefig(outdir / "fig5_topk_annotation_heatmap.png", dpi=300)
     plt.close()
-
 
 def plot_ppr_vs_degree_scatter(diff_df: pd.DataFrame, outdir: Path):
     d = diff_df.copy()
@@ -370,6 +402,24 @@ def plot_ppr_vs_degree_scatter(diff_df: pd.DataFrame, outdir: Path):
     plt.savefig(outdir / "fig6_ppr_vs_degree_scatter.png", dpi=300)
     plt.close()
 
+def write_gene_mapped_table(diff_df: pd.DataFrame, out_tsv: Path, map_df: pd.DataFrame) -> tuple[int, int]:
+    d = diff_df.copy()
+    d["node_clean"] = clean_node_series(d["node"])
+    m = map_df[["accession", "gene_symbol"]].drop_duplicates("accession")
+    d = d.merge(m, left_on="node_clean", right_on="accession", how="left")
+    d["node_display"] = d["gene_symbol"].fillna(d["node"])
+    d = d.sort_values("score", ascending=False)
+    cols = []
+    for c in ["node_display", "score", "degree", "weighted_degree", "node", "node_clean", "gene_symbol"]:
+        if c in d.columns:
+            cols.append(c)
+    out = d[cols].copy()
+    out = out.rename(columns={"node_display": "node"})
+    out_tsv.parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(out_tsv, sep="\t", index=False)
+    mapped_n = int(d["gene_symbol"].notna().sum())
+    total_n = int(len(d))
+    return mapped_n, total_n
 
 def main():
     ap = argparse.ArgumentParser()
@@ -383,6 +433,9 @@ def main():
     ap.add_argument("--top50", type=int, default=50)
     ap.add_argument("--topk-heatmap", type=int, default=50)
     ap.add_argument("--layout-seed", type=int, default=42)
+    ap.add_argument("--write-gene-tsv", action="store_true")
+    ap.add_argument("--gene-tsv-path", type=str, default="outputs/diffusion/diffusion_scores_gene.tsv")
+    ap.add_argument("--uniprot-batch-size", type=int, default=500)
     args = ap.parse_args()
 
     ROOT = Path(__file__).resolve().parents[2]
@@ -407,13 +460,24 @@ def main():
         diff["degree"] = pd.to_numeric(diff["degree"], errors="coerce")
     else:
         diff["degree"] = np.nan
+    if "weighted_degree" in diff.columns:
+        diff["weighted_degree"] = pd.to_numeric(diff["weighted_degree"], errors="coerce")
+    else:
+        diff["weighted_degree"] = np.nan
+
+    diff_valid = diff.dropna(subset=["score"]).copy()
+    mapping = fetch_uniprot_names(clean_node_series(diff_valid["node"]), batch_size=args.uniprot_batch_size)
+
+    if args.write_gene_tsv:
+        out_tsv = Path(str(ROOT / args.gene_tsv_path))
+        mapped_n, total_n = write_gene_mapped_table(diff_valid, out_tsv, mapping)
+        print(f"Wrote: {out_tsv}")
+        print(f"Mapped to gene symbols: {mapped_n}/{total_n} ({mapped_n/total_n:.1%})")
 
     g = load_graph(edges_path, graph_pkl)
-
     seeds = nodes.loc[nodes["is_seed"] == 1, "entry"].tolist()
     hops = multi_source_hops(g, seeds, cutoff=max(args.max_hop, args.max_hop_box))
-
-    rank_map = build_rank_map(diff)
+    rank_map = build_rank_map(diff_valid)
 
     plot_hop_subgraph_structure_rank_shaded(
         g=g,
@@ -424,28 +488,27 @@ def main():
         max_hop=args.max_hop,
         layout_seed=args.layout_seed,
     )
-    plot_rank_score_curve(diff_df=diff, outdir=outdir)
-    plot_score_vs_hop_boxplot(diff_df=diff, hops=hops, outdir=outdir, max_hop_show=args.max_hop_box)
+    plot_rank_score_curve(diff_df=diff_valid, outdir=outdir)
+    plot_score_vs_hop_boxplot(diff_df=diff_valid, hops=hops, outdir=outdir, max_hop_show=args.max_hop_box)
     plot_top50_induced_with_bold_gene_labels(
         g=g,
         nodes_df=nodes,
-        diff_df=diff,
+        diff_df=diff_valid,
         outdir=outdir,
         topn=args.top50,
         layout_seed=args.layout_seed,
     )
     plot_top50_induced_small_nodes_edges_shaded(
         g=g,
-        diff_df=diff,
+        diff_df=diff_valid,
         outdir=outdir,
         topn=args.top50,
         layout_seed=args.layout_seed,
     )
-    plot_topk_annotation_heatmap(nodes_df=nodes, diff_df=diff, outdir=outdir, topk=args.topk_heatmap)
-    plot_ppr_vs_degree_scatter(diff_df=diff, outdir=outdir)
+    plot_topk_annotation_heatmap(nodes_df=nodes, diff_df=diff_valid, outdir=outdir, topk=args.topk_heatmap)
+    plot_ppr_vs_degree_scatter(diff_df=diff_valid, outdir=outdir)
 
     print(f"[OK] wrote figures to: {outdir}")
-
 
 if __name__ == "__main__":
     main()

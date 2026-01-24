@@ -3,9 +3,11 @@ import argparse
 import gzip
 import re
 from pathlib import Path
+from typing import Any, cast
 import pandas as pd
 import requests
-from typing import Any, cast
+
+CHUNK = 1024 * 1024
 
 def read_gz_tsv(path, sep="\t", **kwargs):
     default_kwargs = dict(sep=sep, dtype=str, low_memory=False, on_bad_lines="skip")
@@ -154,25 +156,15 @@ def download_uniprot_sec2pri(taxid: str, out_path: Path, force: bool = False, re
         q = f"{q} AND (reviewed:true)"
 
     fields_try = ["accession,sec_acc", "accession,secondary_accession", "accession,secondary_accessions", "accession,secondaryAccession"]
-    last_err = None
     text = None
     used_fields = None
     for fields in fields_try:
-        params = {
-            "query": q,
-            "format": "tsv",
-            "fields": fields,
-            "size": 500,
-        }
-        try:
-            r = requests.get(base, params=params, timeout=60)
-            if r.status_code == 200 and r.text and "Accession" in r.text.splitlines()[0]:
-                text = r.text
-                used_fields = fields
-                break
-            last_err = f"status={r.status_code} body_head={r.text[:200]}"
-        except Exception as e:
-            last_err = repr(e)
+        params = {"query": q, "format": "tsv", "fields": fields, "size": 500}
+        r = requests.get(base, params=params, timeout=60)
+        if r.status_code == 200 and r.text and "Accession" in r.text.splitlines()[0]:
+            text = r.text
+            used_fields = fields
+            break
 
     if text is None:
         raise RuntimeError()
@@ -180,10 +172,7 @@ def download_uniprot_sec2pri(taxid: str, out_path: Path, force: bool = False, re
     lines = text.splitlines()
     header = lines[0].split("\t")
     if len(header) < 2:
-        raise RuntimeError(f"Unexpected header")
-
-    primary_col = header[0]
-    sec_col = header[1]
+        raise RuntimeError()
 
     rows = []
     for line in lines[1:]:
@@ -192,25 +181,66 @@ def download_uniprot_sec2pri(taxid: str, out_path: Path, force: bool = False, re
             continue
         primary = parts[0].strip()
         sec_field = parts[1].strip()
-        if not primary:
-            continue
-        if not sec_field:
+        if not primary or not sec_field:
             continue
         for sec in sec_field.split(";"):
             sec = sec.strip()
-            if not sec:
-                continue
-            rows.append((sec, primary))
+            if sec:
+                rows.append((sec, primary))
 
     df = pd.DataFrame(rows, columns=["secondary", "primary"]).drop_duplicates()
     df.to_csv(out_path, sep="\t", index=False)
     print(f"UniProt sec2pri map: taxid={taxid} reviewed_only={reviewed_only} fields={used_fields} rows={len(df):,} -> {out_path}")
 
+def iter_sec2pri_from_dat_gz(dat_gz: Path):
+    primary = None
+    secs = []
+    with gzip.open(dat_gz, "rt", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if line.startswith("ID   "):
+                primary = None
+                secs = []
+            elif line.startswith("AC   "):
+                acs = line[5:].strip()
+                for token in acs.split(";"):
+                    acc = token.strip()
+                    if acc:
+                        secs.append(acc)
+            elif line.startswith("//"):
+                if secs:
+                    primary = secs[0]
+                    for s in secs[1:]:
+                        yield s, primary
+                primary = None
+                secs = []
+
+def build_sec2pri_from_mirror(raw_dir: Path, out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    files = [
+        raw_dir / "uniprot_sprot_human.dat.gz",
+        raw_dir / "uniprot_trembl_human.dat.gz",
+    ]
+    for p in files:
+        if not p.exists():
+            raise FileNotFoundError(f"missing: {p}")
+
+    seen = set()
+    with open(out_path, "w", encoding="utf-8") as w:
+        w.write("secondary\tprimary\n")
+        for p in files:
+            for s, pri in iter_sec2pri_from_dat_gz(p):
+                key = (s, pri)
+                if key in seen:
+                    continue
+                seen.add(key)
+                w.write(f"{s}\t{pri}\n")
+    print(f"wrote {out_path} rows={len(seen):,}")
+
 def normalize_uniprot_series(s: pd.Series, sec2pri: dict[str, str]) -> pd.Series:
     x = s.astype(str).map(_strip_isoform)
     return x.map(lambda acc: sec2pri.get(acc, acc))
 
-def merge_edges(root: Path, string_version: str, taxid: str, uniprot_sec2pri_path: Path, refresh_uniprot_sec2pri: bool, reviewed_only: bool) -> None:
+def merge_edges(root: Path, string_version: str, taxid: str, sec2pri_path: Path, refresh_sec2pri: bool, reviewed_only: bool, sec2pri_source: str, uniprot_raw_dir: Path) -> None:
     outdir = root / "inputs" / "ppi"
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -227,7 +257,6 @@ def merge_edges(root: Path, string_version: str, taxid: str, uniprot_sec2pri_pat
     aliases = pd.read_csv(string_aliases, sep="\t")
     s2u = build_string_to_uniprot(aliases)
     s2u.to_csv(out_map, sep="\t", index=False)
-
     s2u_map = dict(zip(s2u["string_id"], s2u["entry"]))
 
     se = pd.read_csv(string_edges, sep="\t")
@@ -247,7 +276,6 @@ def merge_edges(root: Path, string_version: str, taxid: str, uniprot_sec2pri_pat
     se["is_biogrid"] = 0
     keep_cols = ["entry_a", "entry_b", "weight", "string_score", "is_string", "is_biogrid"]
     se = se[keep_cols]
-
     print("STRING mapped edges:", len(se))
 
     if biogrid_edges.exists():
@@ -258,9 +286,7 @@ def merge_edges(root: Path, string_version: str, taxid: str, uniprot_sec2pri_pat
         bg["entry_b"] = bg["b"].map(extract_uniprot_from_biogrid_field)
         bg = bg.dropna(subset=["entry_a", "entry_b"]).copy()
         bg = bg[bg["entry_a"] != bg["entry_b"]].copy()
-
-        bg["weight"] = 0.57  # use STRING medpoint weight for BioGRID edges
-
+        bg["weight"] = 0.57
         bg["string_score"] = pd.NA
         bg["is_string"] = 0
         bg["is_biogrid"] = 1
@@ -270,8 +296,16 @@ def merge_edges(root: Path, string_version: str, taxid: str, uniprot_sec2pri_pat
     else:
         merged = se
 
-    download_uniprot_sec2pri(taxid=taxid, out_path=uniprot_sec2pri_path, force=refresh_uniprot_sec2pri, reviewed_only=reviewed_only)
-    sec2pri = load_sec2pri_map(uniprot_sec2pri_path)
+    sec2pri_path.parent.mkdir(parents=True, exist_ok=True)
+    if sec2pri_source == "rest":
+        download_uniprot_sec2pri(taxid=taxid, out_path=sec2pri_path, force=refresh_sec2pri, reviewed_only=reviewed_only)
+    elif sec2pri_source == "mirror":
+        if refresh_sec2pri or (not sec2pri_path.exists()):
+            build_sec2pri_from_mirror(uniprot_raw_dir, sec2pri_path)
+    else:
+        raise ValueError()
+
+    sec2pri = load_sec2pri_map(sec2pri_path)
 
     merged["entry_a"] = normalize_uniprot_series(merged["entry_a"], sec2pri)
     merged["entry_b"] = normalize_uniprot_series(merged["entry_b"], sec2pri)
@@ -285,57 +319,76 @@ def merge_edges(root: Path, string_version: str, taxid: str, uniprot_sec2pri_pat
     merged["u"] = a.where(a < b, b)
     merged["v"] = b.where(a < b, a)
 
-    merged = merged.sort_values(
-        by=["u", "v", "is_string", "string_score_num"],
-        ascending=[True, True, False, False],
-    )
+    merged = merged.sort_values(by=["u", "v", "is_string", "string_score_num"], ascending=[True, True, False, False])
     agg = merged.drop_duplicates(subset=["u", "v"], keep="first").copy()
 
-    out = agg[["u", "v", "weight", "string_score", "is_string", "is_biogrid"]].rename(
-        columns={"u": "entry_a", "v": "entry_b"}
-    )
+    out = agg[["u", "v", "weight", "string_score", "is_string", "is_biogrid"]].rename(columns={"u": "entry_a", "v": "entry_b"})
     out.to_csv(out_merged, sep="\t", index=False)
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", default=".")
-    ap.add_argument("--string-version", default="v12.0")
-    ap.add_argument("--taxid", default="9606")
-    ap.add_argument("--preprocess-only", action="store_true")
-    ap.add_argument("--merge-only", action="store_true")
-    ap.add_argument("--refresh-uniprot-sec2pri", action="store_true")
-    ap.add_argument("--uniprot-reviewed-only", action="store_true")
+    sp = ap.add_subparsers(dest="cmd", required=True)
+
+    ap_ppi = sp.add_parser("ppi")
+    ap_ppi.add_argument("--root", default=".")
+    ap_ppi.add_argument("--string-version", default="v12.0")
+    ap_ppi.add_argument("--taxid", default="9606")
+    ap_ppi.add_argument("--preprocess-only", action="store_true")
+    ap_ppi.add_argument("--merge-only", action="store_true")
+    ap_ppi.add_argument("--refresh-sec2pri", action="store_true")
+    ap_ppi.add_argument("--uniprot-reviewed-only", action="store_true")
+    ap_ppi.add_argument("--sec2pri-source", choices=["rest", "mirror"], default="rest")
+    ap_ppi.add_argument("--uniprot-raw-dir", default=None)
+    ap_ppi.add_argument("--sec2pri-path", default=None)
+
+    ap_mirror = sp.add_parser("mirror")
+    ap_mirror.add_argument("--root", default=".")
+    ap_mirror.add_argument("--raw", default=None)
+    ap_mirror.add_argument("--out", default=None)
+
     args = ap.parse_args()
 
-    ROOT = Path(__file__).resolve().parents[2]
+    if args.cmd == "mirror":
+        root = Path(args.root).resolve()
+        raw_dir = Path(args.raw).resolve() if args.raw else (root / "inputs" / "ppi" / "UniProt" / "raw")
+        out_path = Path(args.out).resolve() if args.out else (root / "inputs" / "ppi" / "UniProt" / f"uniprot_sec2pri_9606.tsv")
+        build_sec2pri_from_mirror(raw_dir, out_path)
+        return
 
-    outdir_string = ROOT / "inputs" / "ppi" / "STRING" / args.string_version
-    outdir_biogrid = ROOT / "inputs" / "ppi" / "BioGRID"
+    root = Path(args.root).resolve()
+    outdir_string = root / "inputs" / "ppi" / "STRING" / args.string_version
+    outdir_biogrid = root / "inputs" / "ppi" / "BioGRID"
     outdir_string.mkdir(parents=True, exist_ok=True)
     outdir_biogrid.mkdir(parents=True, exist_ok=True)
 
-    uniprot_sec2pri_path = ROOT / "inputs" / "ppi" / "UniProt" / f"uniprot_sec2pri_{args.taxid}.tsv"
+    sec2pri_path = Path(args.sec2pri_path).resolve() if args.sec2pri_path else (root / "inputs" / "ppi" / "UniProt" / f"uniprot_sec2pri_{args.taxid}.tsv")
+    uniprot_raw_dir = Path(args.uniprot_raw_dir).resolve() if args.uniprot_raw_dir else (root / "inputs" / "ppi" / "UniProt" / "raw")
+
     if args.merge_only:
         merge_edges(
-            root=ROOT,
+            root=root,
             string_version=args.string_version,
             taxid=args.taxid,
-            uniprot_sec2pri_path=uniprot_sec2pri_path,
-            refresh_uniprot_sec2pri=args.refresh_uniprot_sec2pri,
+            sec2pri_path=sec2pri_path,
+            refresh_sec2pri=args.refresh_sec2pri,
             reviewed_only=args.uniprot_reviewed_only,
+            sec2pri_source=args.sec2pri_source,
+            uniprot_raw_dir=uniprot_raw_dir,
         )
         return
 
-    preprocess_string(ROOT, args.string_version, args.taxid, outdir_string)
-    preprocess_biogrid(ROOT, outdir_biogrid)
+    preprocess_string(root, args.string_version, args.taxid, outdir_string)
+    preprocess_biogrid(root, outdir_biogrid)
     if not args.preprocess_only:
         merge_edges(
-            root=ROOT,
+            root=root,
             string_version=args.string_version,
             taxid=args.taxid,
-            uniprot_sec2pri_path=uniprot_sec2pri_path,
-            refresh_uniprot_sec2pri=args.refresh_uniprot_sec2pri,
+            sec2pri_path=sec2pri_path,
+            refresh_sec2pri=args.refresh_sec2pri,
             reviewed_only=args.uniprot_reviewed_only,
+            sec2pri_source=args.sec2pri_source,
+            uniprot_raw_dir=uniprot_raw_dir,
         )
 
 UNIPROT_RE = re.compile(

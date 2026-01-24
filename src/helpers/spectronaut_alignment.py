@@ -216,7 +216,7 @@ def main():
     ROOT = Path(__file__).resolve().parents[2]
     os.makedirs(str(ROOT / args.outdir), exist_ok=True)
 
-    ms_ids = load_ms_uniprots(str(ROOT / args.ms_tsv), str(ROOT / args.ms_id_col))
+    ms_ids = load_ms_uniprots(str(ROOT / args.ms_tsv), args.ms_id_col)
     if len(ms_ids) == 0:
         raise RuntimeError("No UniProt accession in MS file.")
 

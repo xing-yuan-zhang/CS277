@@ -161,7 +161,7 @@ def main():
     ap.add_argument("--edges", default=str(ROOT / "inputs/ppi/edges.merged.uniprot.tsv"))
     ap.add_argument("--seeds", default=str(ROOT / "inputs/seeds/seeds.mapped.tsv"))
 
-    ap.add_argument("--hops", type=int, default=1, choices=[1, 2])
+    ap.add_argument("--hops", type=int, default=2, choices=[1, 2])
 
     ap.add_argument(
         "--min-string-weight",
@@ -180,11 +180,11 @@ def main():
     ap.add_argument(
         "--topk-string-per-node",
         type=int,
-        default=50,
+        default=100,
         help="keep only top-K STRING neighbors per active node when expanding hops. 0 disables top-K.",
     )
 
-    ap.add_argument("--max-nodes", type=int, default=5000)
+    ap.add_argument("--max-nodes", type=int, default=50000)
 
     ap.add_argument("--outdir", default=str(ROOT / "inputs/ppi/subgraph"))
 
