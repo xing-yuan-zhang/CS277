@@ -5,43 +5,37 @@ import argparse
 import json
 import logging
 import os
+import pickle
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional, Set
-from pathlib import Path
 
 import networkx as nx
 import pandas as pd
-import pickle
 
 try:
     import yaml
-except ImportError as e:
-    raise SystemExit() from e
+except ImportError:
+    raise SystemExit()
 
 
-def setup_logger(log_path: str) -> logging.Logger:
-    logger = logging.getLogger("candidate_diffusion")
-    logger.setLevel(logging.INFO)
-    logger.handlers.clear()
+def setup_logger(path: str) -> logging.Logger:
+    lg = logging.getLogger("candidate_diffusion")
+    lg.setLevel(logging.INFO)
+    lg.handlers.clear()
 
-    fmt = logging.Formatter(
-        fmt="%(asctime)s | %(levelname)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s", "%Y-%m-%d %H:%M:%S")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
 
-    os.makedirs(os.path.dirname(log_path), exist_ok=True)
-
-    fh = logging.FileHandler(log_path)
-    fh.setLevel(logging.INFO)
+    fh = logging.FileHandler(path)
     fh.setFormatter(fmt)
-    logger.addHandler(fh)
+    lg.addHandler(fh)
 
     sh = logging.StreamHandler()
-    sh.setLevel(logging.INFO)
     sh.setFormatter(fmt)
-    logger.addHandler(sh)
+    lg.addHandler(sh)
 
-    return logger
+    return lg
 
 
 @dataclass
@@ -61,19 +55,14 @@ class ControlItem:
 
 def load_graph(path: str):
     with open(path, "rb") as f:
-        G = pickle.load(f)
-    return G
+        return pickle.load(f)
 
 
 def load_seeds_yaml(path: str) -> Tuple[List[SeedItem], List[ControlItem]]:
-    with open(path, "r", encoding="utf-8") as f:
-        obj = yaml.safe_load(f)
+    obj = yaml.safe_load(open(path, "r", encoding="utf-8"))
 
-    seeds_raw = obj.get("seeds", []) or []
-    ctrls_raw = obj.get("negative_controls", []) or []
-
-    seeds: List[SeedItem] = []
-    for x in seeds_raw:
+    seeds = []
+    for x in obj.get("seeds", []) or []:
         seeds.append(
             SeedItem(
                 query=str(x.get("query", "")).strip(),
@@ -83,8 +72,8 @@ def load_seeds_yaml(path: str) -> Tuple[List[SeedItem], List[ControlItem]]:
             )
         )
 
-    ctrls: List[ControlItem] = []
-    for x in ctrls_raw:
+    ctrls = []
+    for x in obj.get("negative_controls", []) or []:
         ctrls.append(
             ControlItem(
                 query=str(x.get("query", "")).strip(),
@@ -101,69 +90,63 @@ def build_personalization(
     seeds: List[SeedItem],
     exclude_roles: Set[str],
     logger: logging.Logger,
-    seed_weight_col: Optional[str] = "seed_weight",
-    seed_weight_clip: Tuple[float, float] = (0.1, 10.0),
-) -> Tuple[Dict[str, float], List[str], List[str]]:
-    missing: List[str] = []
-    active: List[str] = []
+    seed_weight_col: Optional[str],
+    seed_weight_clip: Tuple[float, float],
+):
+    missing = []
+    active = []
     weights: Dict[str, float] = {}
 
-    def _get_seed_multiplier(node: str) -> float:
+    lo, hi = seed_weight_clip
+
+    def node_mult(n: str) -> float:
         if not seed_weight_col:
             return 1.0
         try:
-            v = G.nodes[node].get(seed_weight_col, None)
+            v = float(G.nodes[n].get(seed_weight_col))
         except Exception:
             return 1.0
-        if v is None:
+        if v <= 0:
             return 1.0
-        try:
-            fv = float(v)
-        except Exception:
-            return 1.0
-        if not (fv > 0):
-            return 1.0
-        lo, hi = seed_weight_clip
-        return max(lo, min(hi, fv))
+        return max(lo, min(hi, v))
 
     for s in seeds:
-        if not s.query:
+        q = s.query
+        if not q or s.role in exclude_roles or q not in G:
+            missing.append(q)
             continue
-        if s.role in exclude_roles:
-            missing.append(s.query)
-            continue
-        if s.query not in G:
-            missing.append(s.query)
-            continue
-        w0 = float(s.weight) if s.weight is not None else 1.0
+
+        w0 = float(s.weight) if s.weight else 1.0
         if w0 <= 0:
-            missing.append(s.query)
+            missing.append(q)
             continue
-        mult = _get_seed_multiplier(s.query)
-        w = w0 * mult
-        weights[s.query] = weights.get(s.query, 0.0) + w
-        active.append(s.query)
+
+        w = w0 * node_mult(q)
+        weights[q] = weights.get(q, 0.0) + w
+        active.append(q)
 
     if not weights:
-        raise ValueError()
+        raise ValueError("no valid seeds")
 
-    total = sum(weights.values())
-    personalization = {k: v / total for k, v in weights.items()}
+    tot = sum(weights.values())
+    pers = {k: v / tot for k, v in weights.items()}
 
-    logger.info(f"seeds used: {len(personalization)}")
+    logger.info(f"seeds used: {len(pers)}")
+
     if seed_weight_col:
         try:
-            mults = {k: _get_seed_multiplier(k) for k in personalization.keys()}
-            show = list(sorted(mults.items(), key=lambda x: x[1], reverse=True))[:10]
-            logger.info(f"seed weight col='{seed_weight_col}' (clip={seed_weight_clip}); top multipliers: {show}")
+            mults = {k: node_mult(k) for k in pers}
+            show = sorted(mults.items(), key=lambda x: x[1], reverse=True)[:10]
+            logger.info(f"seed_weight_col={seed_weight_col} clip={seed_weight_clip} top={show}")
         except Exception:
             pass
+
     if missing:
         logger.warning(
-            f"seeds missing or excluded: {len(missing)} -> {missing[:20]}{'...' if len(missing)>20 else ''}"
+            f"missing seeds: {len(missing)} -> {missing[:20]}{'...' if len(missing) > 20 else ''}"
         )
 
-    return personalization, sorted(set(active)), sorted(set(missing))
+    return pers, sorted(set(active)), sorted(set(missing))
 
 
 def run_ppr(
@@ -174,30 +157,25 @@ def run_ppr(
     max_iter: int,
     tol: float,
     logger: logging.Logger,
-) -> Dict[str, float]:
+):
     logger.info(
-        f"Running PPR with alpha={alpha:.3f}, restart={1-alpha:.3f}, weight_attr={weight_attr}, max_iter={max_iter}, tol={tol}"
+        f"PPR alpha={alpha:.3f} restart={1-alpha:.3f} weight={weight_attr} max_iter={max_iter} tol={tol}"
     )
     try:
-        scores = nx.pagerank(
+        return nx.pagerank(
             G,
             alpha=alpha,
             personalization=personalization,
-            weight=weight_attr if weight_attr else None,
+            weight=weight_attr,
             max_iter=max_iter,
             tol=tol,
         )
     except nx.PowerIterationFailedConvergence as e:
-        raise RuntimeError(
-            f"PageRank did not converge (alpha={alpha}, max_iter={max_iter}, tol={tol}). Try increasing --max_iter or relaxing --tol."
-        ) from e
-    return scores
+        raise RuntimeError("did not converge") from e
 
 
-def add_degree_features(G: nx.Graph, df: pd.DataFrame, weight_attr: Optional[str]) -> pd.DataFrame:
-    deg = dict(G.degree())
-    df["degree"] = df["node"].map(deg).fillna(0).astype(int)
-
+def add_degree_features(G: nx.Graph, df: pd.DataFrame, weight_attr: Optional[str]):
+    df["degree"] = df["node"].map(dict(G.degree())).fillna(0).astype(int)
     if weight_attr:
         try:
             wdeg = dict(G.degree(weight=weight_attr))
@@ -207,201 +185,158 @@ def add_degree_features(G: nx.Graph, df: pd.DataFrame, weight_attr: Optional[str
     return df
 
 
-def maybe_merge_node_attributes(
-    df: pd.DataFrame,
-    node_attr_path: Optional[str],
-    logger: logging.Logger,
-) -> pd.DataFrame:
-    if not node_attr_path:
-        return df
-    if not os.path.exists(node_attr_path):
-        logger.warning(f"Node attributes file not found: {node_attr_path}")
+def maybe_merge_node_attrs(df: pd.DataFrame, path: Optional[str], logger):
+    if not path or not os.path.exists(path):
         return df
 
-    na = pd.read_csv(node_attr_path, sep="\t")
+    na = pd.read_csv(path, sep="\t")
     if "entry" in na.columns and "node" not in na.columns:
         na = na.rename(columns={"entry": "node"})
     if "node" not in na.columns:
-        logger.warning(f"Missing 'entry' or 'node' column: {node_attr_path}")
+        logger.warning(f"bad node attribute: {path}")
         return df
 
-    merged = df.merge(na, on="node", how="left")
-    logger.info(f"Merged node attributes from {node_attr_path}")
-    return merged
+    logger.info(f"merged node attributes: {path}")
+    return df.merge(na, on="node", how="left")
 
 
 def compute_qc(
     df: pd.DataFrame,
     seed_nodes: Set[str],
-    negative_nodes: Set[str],
-    topk: int = 50,
-    llps_col: str = "is_LLPS_any",
-) -> Dict:
-    df2 = df.copy()
-    df2["rank"] = range(1, len(df2) + 1)
+    neg_nodes: Set[str],
+    topk: int,
+    llps_col: str,
+):
+    df = df.copy()
+    df["rank"] = range(1, len(df) + 1)
 
-    seed_df = df2[df2["node"].isin(seed_nodes)]
-    neg_df = df2[df2["node"].isin(negative_nodes)]
+    seed_df = df[df["node"].isin(seed_nodes)]
+    neg_df = df[df["node"].isin(neg_nodes)]
 
     qc = {
-        "n_nodes": int(len(df2)),
-        "topk": int(topk),
-        "n_seeds": int(len(seed_nodes)),
-        "n_neg_controls": int(len(negative_nodes)),
+        "n_nodes": len(df),
+        "topk": topk,
+        "n_seeds": len(seed_nodes),
+        "n_neg_controls": len(neg_nodes),
         "seeds_in_topk": int((seed_df["rank"] <= topk).sum()) if len(seed_df) else 0,
         "seed_rank_mean": float(seed_df["rank"].mean()) if len(seed_df) else None,
         "seed_rank_median": float(seed_df["rank"].median()) if len(seed_df) else None,
         "neg_rank_mean": float(neg_df["rank"].mean()) if len(neg_df) else None,
         "neg_rank_median": float(neg_df["rank"].median()) if len(neg_df) else None,
-        "top10_nodes": df2.head(10)[["node", "score"]].to_dict(orient="records"),
+        "top10_nodes": df.head(10)[["node", "score"]].to_dict("records"),
+        "seed_ranks": seed_df[["node", "rank", "score"]].to_dict("records"),
+        "neg_control_ranks": neg_df[["node", "rank", "score"]].to_dict("records"),
     }
 
-    if len(seed_df):
-        qc["seed_ranks"] = seed_df.sort_values("rank")[["node", "rank", "score"]].to_dict(orient="records")
-    else:
-        qc["seed_ranks"] = []
-
-    if len(neg_df):
-        qc["neg_control_ranks"] = neg_df.sort_values("rank")[["node", "rank", "score"]].to_dict(orient="records")
-    else:
-        qc["neg_control_ranks"] = []
-
-    if llps_col in df2.columns:
-        top = df2.head(topk)
-        base = df2[llps_col].fillna(0).astype(int)
-        topv = top[llps_col].fillna(0).astype(int)
-        qc["llps_col"] = llps_col
-        qc["llps_base_rate"] = float(base.mean()) if len(base) else None
-        qc["llps_in_topk"] = int(topv.sum())
-        qc["llps_rate_in_topk"] = float(topv.mean()) if len(topv) else None
+    if llps_col in df.columns:
+        base = df[llps_col].fillna(0).astype(int)
+        top = df.head(topk)[llps_col].fillna(0).astype(int)
+        qc.update(
+            {
+                "llps_col": llps_col,
+                "llps_base_rate": float(base.mean()),
+                "llps_in_topk": int(top.sum()),
+                "llps_rate_in_topk": float(top.mean()),
+            }
+        )
 
     return qc
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--graph", required=True, help="Path to NetworkX graph gpickle/pkl")
-    p.add_argument("--seeds", required=True, help="Path to seeds.yaml (queries must match graph node IDs)")
-    p.add_argument("--outdir", required=True, help="Output directory, e.g., outputs/diffusion")
+    p.add_argument("--graph", required=True)
+    p.add_argument("--seeds", required=True)
+    p.add_argument("--outdir", required=True)
     p.add_argument("--alpha", nargs="+", type=float, default=[0.7])
     p.add_argument("--topn", type=int, default=100)
-    p.add_argument("--weight_attr", type=str, default="weight")
+    p.add_argument("--weight_attr", default="weight")
     p.add_argument("--qc_topk", type=int, default=50)
     p.add_argument("--exclude_seed_roles", nargs="*", default=[])
     p.add_argument("--max_iter", type=int, default=500)
     p.add_argument("--tol", type=float, default=1e-10)
-    p.add_argument("--node_attributes", type=str, default="")
-    p.add_argument("--llps_col", type=str, default="is_LLPS_any")
-    p.add_argument("--seed_weight_col", type=str, default="seed_weight",
-                   help="Graph node attribute used to up-weight seeds. Set '' to disable.")
-    p.add_argument("--seed_weight_clip_min", type=float, default=0.1,
-                   help="Clip lower bound for seed_weight multiplier (safety).")
-    p.add_argument("--seed_weight_clip_max", type=float, default=10.0,
-                   help="Clip upper bound for seed_weight multiplier (safety).")
+    p.add_argument("--node_attributes", default="")
+    p.add_argument("--llps_col", default="is_LLPS_any")
+    p.add_argument("--seed_weight_col", default="seed_weight")
+    p.add_argument("--seed_weight_clip_min", type=float, default=0.1)
+    p.add_argument("--seed_weight_clip_max", type=float, default=10.0)
     return p.parse_args()
 
 
-def main() -> None:
+def main():
     ROOT = Path(__file__).resolve().parents[1]
-
     args = parse_args()
-    outdir = str(ROOT / args.outdir)
-    os.makedirs(outdir, exist_ok=True)
 
-    log_path = os.path.join(outdir, "diffusion.log")
-    logger = setup_logger(log_path)
+    outdir = ROOT / args.outdir
+    outdir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Graph: {args.graph}")
-    logger.info(f"Seeds: {args.seeds}")
-    logger.info(f"Outdir: {outdir}")
+    logger = setup_logger(str(outdir / "diffusion.log"))
 
     G = load_graph(str(ROOT / args.graph))
-    logger.info(f"Loaded graph: |V|={G.number_of_nodes():,}, |E|={G.number_of_edges():,}, directed={G.is_directed()}")
+    logger.info(f"Graph loaded: |V|={G.number_of_nodes():,} |E|={G.number_of_edges():,}")
 
     seeds, ctrls = load_seeds_yaml(str(ROOT / args.seeds))
+    exclude = set(args.exclude_seed_roles or [])
 
-    exclude_roles = set(args.exclude_seed_roles or [])
-    personalization, active_seed_nodes, missing_seed_nodes = build_personalization(
+    pers, active_seeds, missing = build_personalization(
         G,
         seeds,
-        exclude_roles,
+        exclude,
         logger,
-        seed_weight_col=(args.seed_weight_col.strip() if args.seed_weight_col is not None else None) or None,
+        seed_weight_col=(args.seed_weight_col.strip() or None),
         seed_weight_clip=(args.seed_weight_clip_min, args.seed_weight_clip_max),
     )
 
-    seed_set = set(active_seed_nodes)
-    neg_set = set([c.query for c in ctrls if c.query in G])
+    seed_set = set(active_seeds)
+    neg_set = {c.query for c in ctrls if c.query in G}
 
-    node_attr_path = args.node_attributes.strip()
-    if not node_attr_path:
-        inferred = os.path.join(os.path.dirname(os.path.abspath(args.graph)), "nodes.final.tsv")
-        if os.path.exists(inferred):
-            node_attr_path = inferred
+    node_attr = args.node_attributes.strip()
+    if not node_attr:
+        guess = Path(args.graph).with_name("nodes.final.tsv")
+        if guess.exists():
+            node_attr = str(guess)
 
-    config = {
+    cfg = {
         "graph": args.graph,
         "seeds_yaml": args.seeds,
         "alphas": args.alpha,
         "topn": args.topn,
-        "weight_attr": args.weight_attr if args.weight_attr else None,
-        "exclude_seed_roles": sorted(list(exclude_roles)),
-        "active_seeds": active_seed_nodes,
-        "missing_or_excluded_seeds": missing_seed_nodes,
-        "negative_controls_in_graph": sorted(list(neg_set)),
-        "max_iter": args.max_iter,
-        "tol": args.tol,
-        "node_attributes": node_attr_path if node_attr_path else None,
-        "llps_col": args.llps_col,
-        "seed_weight_col": (args.seed_weight_col.strip() if args.seed_weight_col is not None else None) or None,
-        "seed_weight_clip_min": args.seed_weight_clip_min,
-        "seed_weight_clip_max": args.seed_weight_clip_max,
+        "weight_attr": args.weight_attr or None,
+        "exclude_seed_roles": sorted(exclude),
+        "active_seeds": active_seeds,
+        "missing_or_excluded_seeds": missing,
+        "negative_controls_in_graph": sorted(neg_set),
     }
-    with open(os.path.join(outdir, "diffusion_config.json"), "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2, ensure_ascii=False)
+    json.dump(cfg, open(outdir / "diffusion_config.json", "w"), indent=2)
 
-    weight_attr = args.weight_attr.strip() if args.weight_attr else None
-    if weight_attr == "":
-        weight_attr = None
+    weight_attr = args.weight_attr.strip() or None
 
     for a in args.alpha:
-        if not (0.0 < a < 1.0):
-            raise ValueError(f"alpha must be in (0,1), got {a}")
+        if not (0 < a < 1):
+            raise ValueError(f"bad alpha={a}")
 
-        scores = run_ppr(
-            G,
-            alpha=a,
-            personalization=personalization,
-            weight_attr=weight_attr,
-            max_iter=args.max_iter,
-            tol=args.tol,
-            logger=logger,
+        scores = run_ppr(G, a, pers, weight_attr, args.max_iter, args.tol, logger)
+        df = pd.DataFrame({"node": scores.keys(), "score": scores.values()})
+        df = df.sort_values("score", ascending=False).reset_index(drop=True)
+
+        df = add_degree_features(G, df, weight_attr)
+        df = maybe_merge_node_attrs(df, node_attr, logger)
+
+        df.to_csv(outdir / f"diffusion_scores_alpha{a:.2f}.csv", index=False)
+
+        cand = df[~df["node"].isin(seed_set)].copy()
+        cand["rank_excluding_seeds"] = range(1, len(cand) + 1)
+        cand.head(args.topn).to_csv(
+            outdir / f"candidates_diffusion_top{args.topn}_alpha{a:.2f}.csv",
+            index=False,
         )
 
-        df = pd.DataFrame({"node": list(scores.keys()), "score": list(scores.values())})
-        df = df.sort_values("score", ascending=False).reset_index(drop=True)
-        df = add_degree_features(G, df, weight_attr=weight_attr)
-        df = maybe_merge_node_attributes(df, node_attr_path, logger)
+        qc = compute_qc(df, seed_set, neg_set, args.qc_topk, args.llps_col)
+        json.dump(qc, open(outdir / f"qc_alpha{a:.2f}.json", "w"), indent=2)
 
-        full_path = os.path.join(outdir, f"diffusion_scores_alpha{a:.2f}.csv")
-        df.to_csv(full_path, index=False)
-
-        cand = df[~df["node"].isin(seed_set)].copy().reset_index(drop=True)
-        cand["rank_excluding_seeds"] = range(1, len(cand) + 1)
-        cand_top = cand.head(args.topn).copy()
-
-        cand_path = os.path.join(outdir, f"candidates_diffusion_top{args.topn}_alpha{a:.2f}.csv")
-        cand_top.to_csv(cand_path, index=False)
-
-        qc = compute_qc(df, seed_nodes=seed_set, negative_nodes=neg_set, topk=args.qc_topk, llps_col=args.llps_col)
-        qc_path = os.path.join(outdir, f"qc_alpha{a:.2f}.json")
-        with open(qc_path, "w", encoding="utf-8") as f:
-            json.dump(qc, f, indent=2, ensure_ascii=False)
-
-        logger.info(f"[alpha={a:.2f}] Wrote full scores: {full_path}")
-        logger.info(f"[alpha={a:.2f}] Wrote candidates:  {cand_path}")
         logger.info(
-            f"[alpha={a:.2f}] QC seeds_in_top{args.qc_topk}={qc['seeds_in_topk']}/{qc['n_seeds']}, seed_rank_median={qc['seed_rank_median']}"
+            f"[alpha={a:.2f}] seeds_in_top{args.qc_topk}={qc['seeds_in_topk']}/{qc['n_seeds']} "
+            f"seed_rank_median={qc['seed_rank_median']}"
         )
 
 

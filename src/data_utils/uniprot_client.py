@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-import os
 import json
 import time
 import yaml
@@ -11,50 +10,54 @@ import logging
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Optional
 
 import requests
 import pandas as pd
 
-CHUNK = 1024 * 1024
 
-def sha256(path: Path) -> str:
+def sha256(p: Path) -> str:
     h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(CHUNK), b""):
-            h.update(chunk)
+    with p.open("rb") as f:
+        for c in iter(lambda: f.read(CHUNK), b""):
+            h.update(c)
     return h.hexdigest()
 
-def download(url: str, out: Path, overwrite: bool = False, timeout: int = 60) -> None:
+
+def download(url: str, out: Path, overwrite=False, timeout=60):
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists() and not overwrite:
         return
+
     tmp = out.with_suffix(out.suffix + ".partial")
     headers = {}
-    resume_from = tmp.stat().st_size if tmp.exists() else 0
-    if resume_from > 0:
-        headers["Range"] = f"bytes={resume_from}-"
+    offset = tmp.stat().st_size if tmp.exists() else 0
+    if offset > 0:
+        headers["Range"] = f"bytes={offset}-"
+
     with requests.get(url, stream=True, headers=headers, timeout=timeout) as r:
         r.raise_for_status()
-        mode = "ab" if resume_from > 0 else "wb"
+        mode = "ab" if offset > 0 else "wb"
         with tmp.open(mode) as f:
-            for chunk in r.iter_content(chunk_size=CHUNK):
-                if chunk:
-                    f.write(chunk)
+            for c in r.iter_content(chunk_size=CHUNK):
+                if c:
+                    f.write(c)
+
     tmp.replace(out)
-    print(f"{out} ({out.stat().st_size/1e6:.2f} MB)")
+    print(f"{out} ({out.stat().st_size / 1e6:.2f} MB)")
+
 
 def dataloader_main(
-    root: str = ".",
-    string_version: str = "v12.0",
-    taxid: str = "9606",
-    with_biogrid: bool = False,
-    with_elm: bool = False,
-    overwrite: bool = False,
-) -> None:
+    root=".",
+    string_version="v12.0",
+    taxid="9606",
+    with_biogrid=False,
+    with_elm=False,
+    overwrite=False,
+):
+    root = Path(root).resolve()
     base = "https://stringdb-downloads.org/download"
-    ROOT = Path(root).resolve()
-    string_out = ROOT / "inputs" / "ppi" / "STRING" / string_version
+    string_dir = root / "inputs/ppi/STRING" / string_version
 
     files = [
         f"{taxid}.protein.links.detailed.{string_version}.txt.gz",
@@ -65,36 +68,31 @@ def dataloader_main(
     ]
 
     for fn in files:
-        url = f"{base}/{fn}"
-        out = string_out / fn
         try:
-            download(url, out, overwrite=overwrite)
+            download(f"{base}/{fn}", string_dir / fn, overwrite=overwrite)
         except Exception as e:
             print(f"STRING failed: {fn}: {e}")
 
     if with_biogrid:
-        biogrid_out = ROOT / "inputs" / "ppi" / "BioGRID"
-        biogrid_base = "https://downloads.thebiogrid.org/BioGRID/Latest-Release"
-        biogrid_files = [
+        bg_dir = root / "inputs/ppi/BioGRID"
+        bg_base = "https://downloads.thebiogrid.org/BioGRID/Latest-Release"
+        for fn in [
             "BIOGRID-ALL-LATEST.mitab.zip",
             "BIOGRID-MV-Physical-LATEST.mitab.zip",
-        ]
-        for fn in biogrid_files:
-            url = f"{biogrid_base}/{fn}"
-            out = biogrid_out / fn
+        ]:
             try:
-                download(url, out, overwrite=overwrite)
+                download(f"{bg_base}/{fn}", bg_dir / fn, overwrite=overwrite)
             except Exception as e:
                 print(f"BioGRID failed: {fn}: {e}")
 
     if with_elm:
-        elm_out = ROOT / "inputs" / "annotations" / "motifs" / "ELM"
-        elm_url = "http://elm.eu.org/instances.tsv?q=None&taxon=Homo%20sapiens&instance_logic=true%20positive"
-        out = elm_out / "ELM_instances_human_true_positive.tsv"
+        elm_dir = root / "inputs/annotations/motifs/ELM"
+        url = "http://elm.eu.org/instances.tsv?q=None&taxon=Homo%20sapiens&instance_logic=true%20positive"
         try:
-            download(elm_url, out, overwrite=overwrite)
+            download(url, elm_dir / "ELM_instances_human_true_positive.tsv", overwrite=overwrite)
         except Exception as e:
             print(f"ELM failed: {e}")
+
 
 @dataclass
 class UniProtClientConfig:
@@ -103,40 +101,40 @@ class UniProtClientConfig:
     max_retries: int = 3
     sleep_sec_between_calls: float = 0.1
 
+
 class UniProtClient:
     def __init__(self, cfg: UniProtClientConfig, cache_path: Optional[str] = None):
         self.cfg = cfg
         self.cache_path = cache_path
-        self.cache: Dict[str, Any] = {}
+        self.cache = {}
         if cache_path:
             try:
-                with open(cache_path, "r", encoding="utf-8") as f:
-                    self.cache = json.load(f)
+                self.cache = json.load(open(cache_path, "r", encoding="utf-8"))
             except FileNotFoundError:
-                self.cache = {}
+                pass
 
-    def _save_cache(self) -> None:
+    def _save(self):
         if not self.cache_path:
             return
         Path(self.cache_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(self.cache_path, "w", encoding="utf-8") as f:
-            json.dump(self.cache, f, indent=2, ensure_ascii=False)
+        json.dump(self.cache, open(self.cache_path, "w", encoding="utf-8"), indent=2, ensure_ascii=False)
 
-    def search_best_hit(self, query: str, taxon_id: int, fields: Optional[List[str]] = None) -> Dict[str, Any]:
-        cache_key = f"search_best_hit|q={query}|taxon={taxon_id}|fields={','.join(fields or [])}"
-        if cache_key in self.cache:
-            return self.cache[cache_key]
+    def search(self, query: str, taxon_id: int, fields=None):
+        key = f"{query}|{taxon_id}|{','.join(fields or [])}"
+        if key in self.cache:
+            return self.cache[key]
 
-        fields = fields or [
-            "accession",
-            "id",
-            "protein_name",
-            "gene_primary",
-            "gene_names",
-            "organism_id",
-            "length",
-            "reviewed",
-        ]
+        if fields is None:
+            fields = [
+                "accession",
+                "id",
+                "protein_name",
+                "gene_primary",
+                "gene_names",
+                "organism_id",
+                "length",
+                "reviewed",
+            ]
 
         url = f"{self.cfg.endpoint}/uniprotkb/search"
         params = {
@@ -146,25 +144,24 @@ class UniProtClient:
             "size": 5,
         }
 
-        last_err: Optional[Exception] = None
-        for attempt in range(1, self.cfg.max_retries + 1):
+        last = None
+        for i in range(self.cfg.max_retries):
             try:
                 r = requests.get(url, params=params, timeout=self.cfg.timeout_sec)
                 if r.status_code == 400:
-                    try:
-                        print("[UniProt 400]", r.json())
-                    except Exception:
-                        print("[UniProt 400 raw]", r.text)
+                    print("[UniProt 400]", r.text)
                 r.raise_for_status()
-                data = r.json()
-                self.cache[cache_key] = data
-                self._save_cache()
+                out = r.json()
+                self.cache[key] = out
+                self._save()
                 time.sleep(self.cfg.sleep_sec_between_calls)
-                return data
+                return out
             except Exception as e:
-                last_err = e
-                time.sleep(0.5 * attempt)
-        raise RuntimeError(f"UniProt query failed after retries: {query}") from last_err
+                last = e
+                time.sleep(0.5 * (i + 1))
+
+        raise RuntimeError(f"UniProt query failed: {query}") from last
+
 
 @dataclass
 class Scope:
@@ -174,359 +171,228 @@ class Scope:
     fail_on_unmapped: bool
     fail_on_ambiguous: bool
 
-def setup_logger(log_path: str, level: str = "INFO") -> logging.Logger:
-    logger = logging.getLogger("seed_normalize")
-    logger.setLevel(getattr(logging, level.upper(), logging.INFO))
-    logger.handlers.clear()
-    Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+
+def setup_logger(path: str, level="INFO"):
+    lg = logging.getLogger("seed_normalize")
+    lg.setLevel(getattr(logging, level.upper(), logging.INFO))
+    lg.handlers.clear()
+
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
     fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
-    fh = logging.FileHandler(log_path, encoding="utf-8")
+
+    fh = logging.FileHandler(path, encoding="utf-8")
     fh.setFormatter(fmt)
     sh = logging.StreamHandler()
     sh.setFormatter(fmt)
-    logger.addHandler(fh)
-    logger.addHandler(sh)
-    return logger
 
-def load_yaml(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    lg.addHandler(fh)
+    lg.addHandler(sh)
+    return lg
 
-def parse_scope(scope_yaml: Dict[str, Any]) -> Scope:
+
+def load_yaml(p: str):
+    return yaml.safe_load(open(p, "r", encoding="utf-8"))
+
+
+def parse_scope(y):
     return Scope(
-        taxon_id=int(scope_yaml["organism"]["taxon_id"]),
-        canonical_id=scope_yaml["id_policy"]["canonical_id"],
-        allow_multiple_uniprot_hits=bool(scope_yaml["id_policy"].get("allow_multiple_uniprot_hits", False)),
-        fail_on_unmapped=bool(scope_yaml["quality_gate"].get("fail_on_unmapped", True)),
-        fail_on_ambiguous=bool(scope_yaml["quality_gate"].get("fail_on_ambiguous", True)),
+        taxon_id=int(y["organism"]["taxon_id"]),
+        canonical_id=y["id_policy"]["canonical_id"],
+        allow_multiple_uniprot_hits=bool(y["id_policy"].get("allow_multiple_uniprot_hits", False)),
+        fail_on_unmapped=bool(y["quality_gate"].get("fail_on_unmapped", True)),
+        fail_on_ambiguous=bool(y["quality_gate"].get("fail_on_ambiguous", True)),
     )
 
-def extract_hits(uniprot_json: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return uniprot_json.get("results", []) or []
 
-def normalize_one_seed(client: UniProtClient, query: str, taxon_id: int) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    raw = client.search_best_hit(query=query, taxon_id=taxon_id)
-    hits = extract_hits(raw)
-    return hits, raw
+def best_hit(query: str, hits: list[dict]):
+    q = query.upper()
 
-def hit_to_row(hit: Dict[str, Any]) -> Dict[str, Any]:
-    primary_acc = hit.get("primaryAccession", "")
-    uni_id = hit.get("uniProtkbId", "")
-    organism = (hit.get("organism") or {}).get("taxonId", "")
-    reviewed = hit.get("entryType", "")
-    length = (hit.get("sequence") or {}).get("length", "")
-    genes = hit.get("genes") or []
-    gene_primary = ""
-    if genes and isinstance(genes, list):
-        gene_obj = genes[0] or {}
-        gene_primary = ((gene_obj.get("geneName") or {}).get("value")) or ""
-    protein_desc = hit.get("proteinDescription") or {}
-    rec_name = ""
-    if "recommendedName" in protein_desc:
-        rec_name = ((protein_desc["recommendedName"].get("fullName") or {}).get("value")) or ""
-    return {
-        "uniprot_acc": primary_acc,
-        "uniprot_id": uni_id,
-        "gene_symbol": gene_primary,
-        "protein_name": rec_name,
-        "taxon_id": organism,
-        "reviewed": reviewed,
-        "length": length,
-    }
-
-def build_query(seed: str, taxon_id: int, reviewed: bool | None):
-    q = f"(gene:{seed}) AND (organism_id:{taxon_id})"
-    if reviewed is True:
-        q += " AND (reviewed:true)"
-    return q
-
-def pick_best_uniprot_hit(query: str, hits: list[dict]) -> dict | None:
-    q = query.upper().strip()
-
-    def is_reviewed(h: dict) -> int:
-        et = str(h.get("entryType", "")).lower()
-        return 1 if "reviewed" in et else 0
-
-    def gene_primary(h: dict) -> str:
+    def score(h):
+        reviewed = int("reviewed" in str(h.get("entryType", "")).lower())
         genes = h.get("genes") or []
-        if genes and isinstance(genes, list):
+        gp = ""
+        syn = set()
+        if genes:
             g0 = genes[0] or {}
-            gn = (g0.get("geneName") or {}).get("value")
-            if isinstance(gn, str):
-                return gn.upper()
-        return ""
+            gp = ((g0.get("geneName") or {}).get("value") or "").upper()
+            for s in g0.get("synonyms") or []:
+                v = (s or {}).get("value")
+                if isinstance(v, str):
+                    syn.add(v.upper())
 
-    def gene_synonyms(h: dict) -> set[str]:
-        syns: set[str] = set()
-        genes = h.get("genes") or []
-        if not genes or not isinstance(genes, list):
-            return syns
-        g0 = genes[0] or {}
-        for s in (g0.get("synonyms") or []):
-            v = (s or {}).get("value")
-            if isinstance(v, str):
-                syns.add(v.upper())
-        return syns
+        pname = (
+            ((h.get("proteinDescription") or {}).get("recommendedName") or {})
+            .get("fullName", {})
+            .get("value", "")
+            .lower()
+        )
 
-    def protein_name(h: dict) -> str:
-        pd = h.get("proteinDescription") or {}
-        rn = (pd.get("recommendedName") or {}).get("fullName") or {}
-        v = rn.get("value")
-        if isinstance(v, str):
-            return v
-        return ""
+        iso = int("isoform" in pname)
+        length = int((h.get("sequence") or {}).get("length") or 0)
 
-    def length(h: dict) -> int:
-        seq = h.get("sequence") or {}
-        try:
-            return int(seq.get("length") or 0)
-        except Exception:
-            return 0
+        return (reviewed, gp == q, q in syn, -iso, length)
 
-    def score(h: dict) -> tuple:
-        reviewed = is_reviewed(h)
-        gp = gene_primary(h)
-        primary_match = 1 if gp == q else 0
-        syn_match = 1 if q in gene_synonyms(h) else 0
-        pname = protein_name(h).lower()
-        iso_penalty = 1 if "isoform" in pname else 0
-        L = length(h)
-        return (reviewed, primary_match, syn_match, -iso_penalty, L)
+    if not hits:
+        return None
 
     ranked = sorted(hits, key=score, reverse=True)
-    if not ranked:
-        return None
     if len(ranked) == 1:
         return ranked[0]
 
-    best = ranked[0]
-    s0 = score(best)
-
-    if s0[0] == 1 and s0[1] == 1:
-        return best
-    if s0[1] == 1:
-        return best
     if score(ranked[0]) == score(ranked[1]):
         return None
-    return best
 
-def write_tsv(path: str, rows: List[Dict[str, Any]]) -> None:
+    return ranked[0]
+
+
+def hit_row(h):
+    genes = h.get("genes") or []
+    gp = ""
+    if genes:
+        gp = ((genes[0].get("geneName") or {}).get("value")) or ""
+
+    pname = (
+        ((h.get("proteinDescription") or {}).get("recommendedName") or {})
+        .get("fullName", {})
+        .get("value", "")
+    )
+
+    return {
+        "uniprot_acc": h.get("primaryAccession", ""),
+        "uniprot_id": h.get("uniProtkbId", ""),
+        "gene_symbol": gp,
+        "protein_name": pname,
+        "taxon_id": (h.get("organism") or {}).get("taxonId", ""),
+        "reviewed": h.get("entryType", ""),
+        "length": (h.get("sequence") or {}).get("length", ""),
+    }
+
+
+def write_tsv(path: str, rows: list[dict]):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     if not rows:
         raise ValueError()
+
     cols = list(rows[0].keys())
     with open(path, "w", encoding="utf-8") as f:
         f.write("\t".join(cols) + "\n")
         for r in rows:
             f.write("\t".join(str(r.get(c, "")) for c in cols) + "\n")
 
-def uniprot_main(scope_path: str, seeds_path: str, cache_path: str, out_tsv: str, out_json: str, log_path: str) -> None:
-    scope_yaml = load_yaml(scope_path)
-    seeds_yaml = load_yaml(seeds_path)
-    scope = parse_scope(scope_yaml)
-    logger = setup_logger(log_path, level=scope_yaml.get("logging", {}).get("level", "INFO"))
 
-    up_cfg = UniProtClientConfig(
-        endpoint=scope_yaml.get("uniprot", {}).get("endpoint", "https://rest.uniprot.org"),
-        timeout_sec=int(scope_yaml.get("uniprot", {}).get("timeout_sec", 30)),
-        max_retries=int(scope_yaml.get("uniprot", {}).get("max_retries", 3)),
-        sleep_sec_between_calls=float(scope_yaml.get("uniprot", {}).get("sleep_sec_between_calls", 0.1)),
-    )
-    client = UniProtClient(cfg=up_cfg, cache_path=cache_path)
+def uniprot_main(scope_path, seeds_path, cache_path, out_tsv, out_json, log_path):
+    scope_y = load_yaml(scope_path)
+    seeds_y = load_yaml(seeds_path)
+    scope = parse_scope(scope_y)
 
-    seeds = seeds_yaml.get("seeds", [])
+    logger = setup_logger(log_path, scope_y.get("logging", {}).get("level", "INFO"))
+
+    cfg = UniProtClientConfig(**scope_y.get("uniprot", {}))
+    client = UniProtClient(cfg, cache_path)
+
+    seeds = seeds_y.get("seeds", [])
     if not seeds:
-        raise ValueError("configs/seeds.yaml: seeds is empty.")
+        raise ValueError("seeds empty")
 
-    normalized_rows: List[Dict[str, Any]] = []
-    audit_records: List[Dict[str, Any]] = []
-    unmapped: List[str] = []
-    ambiguous: List[str] = []
+    rows, audit, unmapped, ambiguous = [], [], [], []
 
-    for item in seeds:
-        query = str(item["query"]).strip()
-        role = item.get("role", "")
-        notes = item.get("notes", "")
-        evidence = item.get("evidence", [])
+    for s in seeds:
+        q = str(s["query"]).strip()
+        raw = client.search(q, scope.taxon_id)
+        hits = raw.get("results") or []
 
-        hits, raw = normalize_one_seed(client, query=query, taxon_id=scope.taxon_id)
-
-        if len(hits) == 0:
-            logger.error(f"UNMAPPED: {query}")
-            unmapped.append(query)
-            audit_records.append({"query": query, "status": "unmapped", "raw": raw})
+        if not hits:
+            logger.error(f"UNMAPPED: {q}")
+            unmapped.append(q)
+            audit.append({"query": q, "status": "unmapped", "raw": raw})
             continue
 
-        if len(hits) > 1 and (not scope.allow_multiple_uniprot_hits):
-            best = pick_best_uniprot_hit(query, hits)
-            if best is None:
-                logger.error(f"AMBIGUOUS: {query} | hits={len(hits)}")
-                cand = [(h.get("primaryAccession"), h.get("uniProtkbId"), h.get("entryType")) for h in hits]
-                logger.error(f"CANDIDATES: {query} | {cand}")
-                ambiguous.append(query)
-                audit_records.append({"query": query, "status": "ambiguous", "raw": raw})
+        if len(hits) > 1 and not scope.allow_multiple_uniprot_hits:
+            h = best_hit(q, hits)
+            if h is None:
+                logger.error(f"AMBIGUOUS: {q}")
+                ambiguous.append(q)
+                audit.append({"query": q, "status": "ambiguous", "raw": raw})
                 continue
-            hits = [best]
+            hits = [h]
 
-        best = hits[0]
-        row = hit_to_row(best)
+        row = hit_row(hits[0])
         row.update(
             {
-                "query": query,
-                "role": role,
-                "notes": notes,
-                "evidence": json.dumps(evidence, ensure_ascii=False),
+                "query": q,
+                "role": s.get("role", ""),
+                "notes": s.get("notes", ""),
+                "evidence": json.dumps(s.get("evidence", []), ensure_ascii=False),
             }
         )
 
-        normalized_rows.append(row)
-        audit_records.append({"query": query, "status": "ok", "resolved": row})
-        logger.info(f"OK: {query} -> {row.get('uniprot_acc')} ({row.get('gene_symbol')})")
+        rows.append(row)
+        audit.append({"query": q, "status": "ok", "resolved": row})
+        logger.info(f"OK: {q} -> {row['uniprot_acc']}")
 
     if unmapped and scope.fail_on_unmapped:
-        raise SystemExit(f"Fail: unmapped seeds found: {unmapped}")
+        raise SystemExit(f"Fail unmapped: {unmapped}")
     if ambiguous and scope.fail_on_ambiguous:
-        raise SystemExit(f"Fail: ambiguous seeds found: {ambiguous}")
+        raise SystemExit(f"Fail ambiguous: {ambiguous}")
 
-    write_tsv(out_tsv, normalized_rows)
+    write_tsv(out_tsv, rows)
     Path(out_json).parent.mkdir(parents=True, exist_ok=True)
-    with open(out_json, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "scope": {"taxon_id": scope.taxon_id, "canonical_id": scope.canonical_id},
-                "seeds": normalized_rows,
-                "audit": audit_records,
-                "unmapped": unmapped,
-                "ambiguous": ambiguous,
-            },
-            f,
-            indent=2,
-            ensure_ascii=False,
-        )
+    json.dump(
+        {
+            "scope": {"taxon_id": scope.taxon_id, "canonical_id": scope.canonical_id},
+            "seeds": rows,
+            "audit": audit,
+            "unmapped": unmapped,
+            "ambiguous": ambiguous,
+        },
+        open(out_json, "w", encoding="utf-8"),
+        indent=2,
+        ensure_ascii=False,
+    )
 
-    logger.info(f"Wrote: {out_tsv}")
-    logger.info(f"Wrote: {out_json}")
+    logger.info(f"Wrote {out_tsv}")
+    logger.info(f"Wrote {out_json}")
 
-def seed_map_main(seeds_path: Optional[str] = None, attr_path: Optional[str] = None, out_path: Optional[str] = None) -> None:
-    seeds_path = seeds_path or SEEDS
-    attr_path = attr_path or str(ATTR)
-    out_path = out_path or str(OUT)
 
-    out_p = Path(out_path)
-    out_p.parent.mkdir(parents=True, exist_ok=True)
-
-    s = pd.read_csv(seeds_path, sep="\t")
-    if "query" not in s.columns:
-        raise ValueError()
-    s["query"] = s["query"].astype(str).str.strip()
-
-    attr = pd.read_csv(attr_path, sep="\t")
-    if not {"entry", "gene_symbol"}.issubset(set(attr.columns)):
-        raise ValueError()
-
-    m = attr.dropna(subset=["gene_symbol"]).copy()
-    m["gene_symbol"] = m["gene_symbol"].astype(str).str.upper()
-    gene2entry = m.groupby("gene_symbol")["entry"].apply(list).to_dict()
-
-    out_rows = []
-    for q in s["query"].tolist():
-        if UNIPROT_RE.search(q):
-            out_rows.append({"query": q, "entry": q, "method": "as_uniprot", "n_candidates": 1})
-            continue
-        key = q.upper()
-        cands = gene2entry.get(key, [])
-        if len(cands) == 0:
-            out_rows.append({"query": q, "entry": None, "method": "not_found", "n_candidates": 0})
-        else:
-            out_rows.append(
-                {
-                    "query": q,
-                    "entry": cands[0],
-                    "method": "gene_symbol_in_nodes.attributes",
-                    "n_candidates": len(cands),
-                }
-            )
-
-    out = pd.DataFrame(out_rows)
-    out.to_csv(out_p, sep="\t", index=False)
-    missing = out["entry"].isna().sum()
-    print(f"wrote {out_p} seeds={len(out)} missing={missing}")
-    if missing > 0:
-        print("seeds not mapped to UniProt entries")
-
-def build_argparser() -> argparse.ArgumentParser:
+def main():
     ap = argparse.ArgumentParser()
     sp = ap.add_subparsers(dest="cmd", required=True)
 
-    ap_dl = sp.add_parser("download")
-    ap_dl.add_argument("--root", default=".")
-    ap_dl.add_argument("--string-version", default="v12.0")
-    ap_dl.add_argument("--taxid", default="9606")
-    ap_dl.add_argument("--with-biogrid", action="store_true")
-    ap_dl.add_argument("--with-elm", action="store_true")
-    ap_dl.add_argument("--overwrite", action="store_true")
+    d = sp.add_parser("download")
+    d.add_argument("--root", default=".")
+    d.add_argument("--string-version", default="v12.0")
+    d.add_argument("--taxid", default="9606")
+    d.add_argument("--with-biogrid", action="store_true")
+    d.add_argument("--with-elm", action="store_true")
+    d.add_argument("--overwrite", action="store_true")
 
-    ap_map = sp.add_parser("map")
-    ap_map.add_argument("--seeds", default=SEEDS)
-    ap_map.add_argument("--attr", default=str(ATTR))
-    ap_map.add_argument("--out", default=str(OUT))
+    u = sp.add_parser("uniprot")
+    u.add_argument("--scope", required=True)
+    u.add_argument("--seeds", required=True)
+    u.add_argument("--cache", required=True)
+    u.add_argument("--out_tsv", required=True)
+    u.add_argument("--out_json", required=True)
+    u.add_argument("--log", required=True)
 
-    ap_up = sp.add_parser("uniprot")
-    ap_up.add_argument("--scope", required=True)
-    ap_up.add_argument("--seeds", required=True)
-    ap_up.add_argument("--cache", required=True)
-    ap_up.add_argument("--out_tsv", required=True)
-    ap_up.add_argument("--out_json", required=True)
-    ap_up.add_argument("--log", required=True)
+    a = ap.parse_args()
 
-    return ap
+    if a.cmd == "download":
+        dataloader_main(**vars(a))
+    elif a.cmd == "uniprot":
+        uniprot_main(a.scope, a.seeds, a.cache, a.out_tsv, a.out_json, a.log)
+    else:
+        raise SystemExit(a.cmd)
 
-def main() -> None:
-    ap = build_argparser()
-    args = ap.parse_args()
 
-    if args.cmd == "download":
-        dataloader_main(
-            root=args.root,
-            string_version=args.string_version,
-            taxid=args.taxid,
-            with_biogrid=args.with_biogrid,
-            with_elm=args.with_elm,
-            overwrite=args.overwrite,
-        )
-        return
-
-    if args.cmd == "map":
-        seed_map_main(seeds_path=args.seeds, attr_path=args.attr, out_path=args.out)
-        return
-
-    if args.cmd == "uniprot":
-        uniprot_main(
-            scope_path=args.scope,
-            seeds_path=args.seeds,
-            cache_path=args.cache,
-            out_tsv=args.out_tsv,
-            out_json=args.out_json,
-            log_path=args.log,
-        )
-        return
-
-    raise SystemExit(f"err: {args.cmd}")
+CHUNK = 1024 * 1024
 
 ROOT = Path(__file__).resolve().parent
 SEEDS = str(ROOT / "inputs/seeds/seeds.init.tsv")
-ATTR = Path(ROOT / "inputs/annotations/nodes.attributes.tsv")
-OUT = Path(ROOT / "inputs/seeds/seeds.mapped.tsv")
+ATTR = ROOT / "inputs/annotations/nodes.attributes.tsv"
+OUT = ROOT / "inputs/seeds/seeds.mapped.tsv"
 
 UNIPROT_RE = re.compile(
-    r"""
-    \b(
-        [A-NR-Z][0-9][A-Z0-9]{3}[0-9]
-      | [OPQ][0-9][A-Z0-9]{3}[0-9]
-      | A0A[0-9A-Z]{7}
-    )\b
-    """,
-    re.VERBOSE,
+    r"\b([A-NR-Z][0-9][A-Z0-9]{3}[0-9]|[OPQ][0-9][A-Z0-9]{3}[0-9]|A0A[0-9A-Z]{7})\b"
 )
 
 if __name__ == "__main__":
