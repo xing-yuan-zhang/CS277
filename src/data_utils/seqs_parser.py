@@ -45,11 +45,9 @@ def main():
             continue
         keep.append((sid, seq))
     
-    '''
     with open(outdir / "node_ids.txt", "w", encoding="utf-8") as f:
         for sid, _ in keep:
             f.write(sid + "\n")
-    '''
             
     with open(outdir / "seqs.fasta", "w", encoding="utf-8") as f:
         for sid, seq in keep:
