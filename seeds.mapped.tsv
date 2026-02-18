@@ -1,0 +1,8 @@
+query	entry	method	n_candidates	role
+SRC	P12931	gene_symbol_in_nodes.attributes	1	Src-family-kinase
+TRIP10	Q15642	gene_symbol_in_nodes.attributes	1	CIP4-TOCA-family
+FNBP1	Q96RU3	gene_symbol_in_nodes.attributes	1	FBP17
+FNBP1L	Q5T0N5	gene_symbol_in_nodes.attributes	1	TOCA-1
+CSK	P41240	gene_symbol_in_nodes.attributes	1	reported-excluded
+PIK3R1	P27986	gene_symbol_in_nodes.attributes	1	PI3K-regulatory-subunit
+AKT1	P31749	gene_symbol_in_nodes.attributes	1	AKT-pathway
