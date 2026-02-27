@@ -1,6 +1,17 @@
+"""
+python emb_split.py `
+--emb_npz esm2_35m.npz `
+--ppi_edges string_edges.tsv `
+--v_final node_ids.txt `
+--split edge `
+--outdir splits_edge `
+--dedup_undirected
+"""
+
 import os
 import argparse
 import numpy as np
+from pathlib import Path
 
 def read_ids(path):
     if not path:
@@ -60,9 +71,10 @@ def main():
     ap.add_argument("--dedup_undirected", action="store_true")
     args = ap.parse_args()
 
-    os.makedirs(args.outdir, exist_ok=True)
+    base = Path(__file__).resolve().parent
+    os.makedirs(base / args.outdir, exist_ok=True)
 
-    z = np.load(args.emb_npz, allow_pickle=True)
+    z = np.load(base / args.emb_npz, allow_pickle=True)
     ids = list(z["ids"])
     idset = set(ids)
 
