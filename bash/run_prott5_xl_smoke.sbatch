@@ -11,8 +11,11 @@
 
 set -euo pipefail
 
-source ~/.bashrc
+source /projects/m000226/miniconda3/etc/profile.d/conda.sh
 conda activate plm
+
+which python
+python -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
 
 export HF_HOME=/projects/m000226/hf
 export TRANSFORMERS_CACHE=$HF_HOME/transformers
