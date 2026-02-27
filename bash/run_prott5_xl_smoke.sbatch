@@ -23,8 +23,8 @@ export HF_HUB_CACHE=$HF_HOME/hub
 export HF_DATASETS_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
-SCRIPT_DIR=/projects/m000226/seqfm_geometry/src/emb
-OUT_DIR=/projects/m000226/seqfm_geometry/outputs
+SCRIPT_DIR=/projects/m000226/seqfm-geometry/src/emb
+OUT_DIR=/projects/m000226/seqfm-geometry/outputs
 
 python $SCRIPT_DIR/emb_prott5.py \
   --model Rostlab/prot_t5_xl_uniref50 \
