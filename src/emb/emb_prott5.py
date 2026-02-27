@@ -91,6 +91,7 @@ def main():
 
     tok = AutoTokenizer.from_pretrained(args.model, do_lower_case=False, use_fast=False)
     model = AutoModel.from_pretrained(args.model).eval().to(device)
+    model = model.get_encoder()
 
     items = []
     for nid in ids:

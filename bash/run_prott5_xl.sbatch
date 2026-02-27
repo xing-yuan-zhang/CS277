@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH -J esm2_650m
+#SBATCH -J prott5-xl
 #SBATCH -p batch
 #SBATCH -A marlowe-m000226-free
 #SBATCH -N 1
