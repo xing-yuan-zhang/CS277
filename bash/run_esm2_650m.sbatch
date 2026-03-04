@@ -5,6 +5,7 @@
 #SBATCH -N 1
 #SBATCH -c 4
 #SBATCH --mem=64G
+#SBATCH --mail-user:
 #SBATCH -t 48:00:00
 #SBATCH -o logs/%x.%j.out
 #SBATCH -e logs/%x.%j.err

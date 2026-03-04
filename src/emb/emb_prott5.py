@@ -1,3 +1,17 @@
+"""
+python embed_prott5.py `
+  --model Rostlab/prot_t5_xl_uniref50 `
+  --fasta seqs.fasta `
+  --node_ids node_ids.txt `
+  --out out/prott5.npy `
+  --max_len 1024 `
+  --stride 768 `
+  --bucket 128 `
+  --win_bs 16 `
+  --fp16 `
+  --l2norm
+"""
+
 import argparse
 import numpy as np
 import torch

@@ -46,6 +46,10 @@ def main():
             f.write(">" + sid + "\n")
             for i in range(0, len(seq), 60):
                 f.write(seq[i:i+60] + "\n")
+    
+    with open(outdir / "seqs_length.tsv", "w", encoding="utf-8") as f:
+        for seq in keep:
+            f.write("\t" + str(len(seq)) + "\n")
 
 if __name__ == "__main__":
     main()

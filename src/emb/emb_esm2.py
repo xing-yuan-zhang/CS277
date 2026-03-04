@@ -1,4 +1,19 @@
-# emb_esm2.py
+"""
+Slide long sequences into overlapping windows, embed each window with ESM2, and average the window embeddings to get a single embedding per sequence.
+
+python embed.py `
+  --model facebook/esm2_t33_650M_UR50D `
+  --fasta seqs.fasta `
+  --node_ids node_ids.txt `
+  --out out/esm2_650m.npy `
+  --max_len 1022 `
+  --stride 768 `
+  --bucket 128 `
+  --win_bs 64 `
+  --fp16 `
+  --l2norm
+"""
+
 import argparse
 import numpy as np
 import torch
@@ -65,7 +80,7 @@ def embed_windows(model, tok, parts, device, max_len, bs, use_amp):
             with torch.autocast(device_type="cuda", dtype=torch.float16):
                 h = model(**x).last_hidden_state
         else:
-            h = model(**x).last_hidden_state
+            h = model(**x).last_hidden_state    # (B, L, D)
 
         attn = x["attention_mask"].bool()
 
@@ -76,7 +91,7 @@ def embed_windows(model, tok, parts, device, max_len, bs, use_amp):
         last = torch.clamp(lens - 1, min=0)     # index of last True (EOS or last token)
         keep[torch.arange(keep.size(0), device=keep.device), last] = False
 
-        m = keep.unsqueeze(-1).to(h.dtype)
+        m = keep.unsqueeze(-1).to(h.dtype)      # (B, L, 1)
         denom = m.sum(dim=1).clamp_min(1.0)
         v = (h * m).sum(dim=1) / denom          # (B, D)
 
@@ -110,9 +125,8 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     use_amp = bool(args.fp16 and device == "cuda")
 
-    base = Path(__file__).resolve().parent
-    seqs = read_fasta(base / args.fasta)
-    ids = read_ids(base / args.node_ids)
+    seqs = read_fasta(args.fasta)
+    ids = read_ids(args.node_ids)
 
     tok = AutoTokenizer.from_pretrained(args.model, do_lower_case=False)
     model = AutoModel.from_pretrained(args.model).eval().to(device)
