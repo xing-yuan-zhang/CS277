@@ -4,6 +4,7 @@
 #SBATCH -A marlowe-m000226-free
 #SBATCH -N 1
 #SBATCH -c 4
+#SBATCH -g 1
 #SBATCH --mem=64G
 #SBATCH -t 48:00:00
 #SBATCH -o logs/%x.%j.out
@@ -26,14 +27,15 @@ export HF_DATASETS_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
 SCRIPT_DIR=/projects/m000226/seqfm-geometry/src/emb
+DATA_DIR=/projects/m000226/seqfm-geometry/parent_graph/
 OUT_DIR=/projects/m000226/seqfm-geometry/emb
 mkdir -p "$OUT_DIR"
 
 python $SCRIPT_DIR/emb.py \
   --backend prott5 \
   --model Rostlab/prot_t5_xl_uniref50 \
-  --fasta seqs.fasta \
-  --node_ids node_ids.txt \
+  --fasta $DATA_DIR/seqs.fasta \
+  --node_ids $DATA_DIR/node_ids.txt \
   --out $OUT_DIR/prott5_xl.npz \
   --max_len 1024 \
   --stride 768 \
