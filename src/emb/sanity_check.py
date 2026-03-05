@@ -79,7 +79,6 @@ def length_correlation(path, lengths, k=10000, seed=0):
 
     r = np.linalg.norm(x, axis=1)
 
-    # Spearman (rank correlation) without scipy: rank via argsort twice
     def rank(a):
         o = np.argsort(a)
         r = np.empty_like(o, dtype=np.float32)

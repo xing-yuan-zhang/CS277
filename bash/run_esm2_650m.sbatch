@@ -27,14 +27,15 @@ export HF_DATASETS_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
 SCRIPT_DIR=/projects/m000226/seqfm-geometry/src/emb
-OUT_DIR=/projects/m000226/seqfm-geometry/outputs
+OUT_DIR=/projects/m000226/seqfm-geometry/emb
 mkdir -p "$OUT_DIR"
 
-python $SCRIPT_DIR/emb_esm2.py \
+python $SCRIPT_DIR/emb.py \
+  --backend esm2 \
   --model facebook/esm2_t33_650M_UR50D \
   --fasta seqs.fasta \
   --node_ids node_ids.txt \
-  --out $OUT_DIR/esm2_t33_650m.npy \
+  --out $OUT_DIR/esm2_t33_650m.npz \
   --max_len 1022 \
   --stride 768 \
   --bucket 128 \

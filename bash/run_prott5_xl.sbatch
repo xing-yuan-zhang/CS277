@@ -26,14 +26,15 @@ export HF_DATASETS_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
 SCRIPT_DIR=/projects/m000226/seqfm-geometry/src/emb
-OUT_DIR=/projects/m000226/seqfm-geometry/outputs
+OUT_DIR=/projects/m000226/seqfm-geometry/emb
 mkdir -p "$OUT_DIR"
 
-python $SCRIPT_DIR/emb_prott5.py \
+python $SCRIPT_DIR/emb.py \
+  --backend prott5 \
   --model Rostlab/prot_t5_xl_uniref50 \
   --fasta seqs.fasta \
   --node_ids node_ids.txt \
-  --out $OUT_DIR/prott5_xl.npy \
+  --out $OUT_DIR/prott5_xl.npz \
   --max_len 1024 \
   --stride 768 \
   --bucket 128 \
