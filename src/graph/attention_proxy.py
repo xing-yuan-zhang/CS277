@@ -430,7 +430,7 @@ def main():
     single_pll_cache = {} if args.method == "pll" else None
 
     for i in range(start, end):
-        cand_idx = np.argpartition(-G[i], M)[:M]
+        cand_idx = np.argpartition(-G[i], M - 1)[:M]
         u = nodes[i]
         sA = seq[u]
 
@@ -480,7 +480,7 @@ def main():
         else:
             probs = norm_to_prob(scores, "sigmoid_z", temp=args.sigmoid_temp)
 
-        sel = np.argpartition(-probs, topm)[:topm]
+        sel = np.argpartition(-probs, topm - 1)[:topm]
         for k in sel:
             v = scored[int(k)][0]
             p = float(probs[int(k)])
