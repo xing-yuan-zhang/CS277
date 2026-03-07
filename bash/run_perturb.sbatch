@@ -7,8 +7,9 @@
 #SBATCH -G 1
 #SBATCH --mem=64G
 #SBATCH -t 48:00:00
-#SBATCH -o logs/%x.%j.out
-#SBATCH -e logs/%x.%j.err
+#SBATCH --array=0-9
+#SBATCH -o logs/%x.%A_%a.out
+#SBATCH -e logs/%x.%A_%a.err
 
 set -euo pipefail
 
