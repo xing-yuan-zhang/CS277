@@ -6,17 +6,11 @@ Using large protein language models (ESM2/ProtT5), model-internal signals such a
 
 Goal is to evaluate whether FM representations encode functional interaction signals that can recover proteome from actual proteomic-MS.
 
----
-
 # Pipeline
-
----
 
 ## 1. Protein embedding
 
 Begin with STRING *homo sapiens* protein universe (~19k Pr), each protein sequence is encoded with ESM2/ProtT5 to construct PPI graphs.
-
----
 
 ## 2. Construct interaction propensity graphs
 
@@ -30,8 +24,6 @@ Build unsupervised weighted graphs with:
 
 Edge weights represent interaction propensity proxies, not direct physical binding predictions.
 
----
-
 ## 3. Fuse with STRING network
 
 Integrate signals with STRING database in 2 ways:
@@ -42,19 +34,13 @@ Integrate signals with STRING database in 2 ways:
 
 The goal is to preserve experimentally supported network structure while allowing FM signals to calibrate interaction confidence.
 
----
-
 ## 4. Diffusion ranking from seed proteins
 
 Protein retrieval is performed using personalized PageRank with seed protein nodes, and ranking is performed on each source of PPI graphs.
 
----
-
 ## 5. Validation with condensate proteomic-MS
 
 Validate against actual proteomic MS enrichment data from biomolecular condensate pull-down experiments. Positive proteins are defined with FDR and q-value threshold.
-
----
 
 # Results Summary
 
@@ -75,15 +61,11 @@ Dataset:
 | FM-SIM kNN (row-softmax) | 0.060 | 0.125 | 0.046 | 4.53× |
 | FM-SIM kNN (cos+) | 0.059 | 0.125 | 0.046 | 4.53× |
 
----
-
 # Key Observations
 
 STRING network already provides a strong baseline for assembly retrieval. FM-derived graphs contain meaningful interaction propensity information but are weaker than STRING alone. Using FM signals to reweight STRING edges yields modest improvements. 
 
 In contrast, similarity-based kNN graphs perform poorly, suggesting that interaction propensity signals carry more useful information than global sequence similarity for this task.
-
----
 
 # Figures
 
@@ -91,22 +73,14 @@ In contrast, similarity-based kNN graphs perform poorly, suggesting that interac
 
 ![Precision comparison](docs/graph_metrics_precision_horizontal.png)
 
----
-
 ## Main metric comparison
 
 ![Grouped metrics](docs/graph_metrics_main_grouped.png)
-
----
 
 ## Enrichment factor ranking
 
 ![Enrichment factor](docs/graph_metrics_ef.png)
 
----
-
 ## Top method comparison
 
 ![Top methods](docs/graph_metrics_top_methods.png)
-
----
