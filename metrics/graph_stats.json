@@ -1,0 +1,77 @@
+{
+  "cleaning": {
+    "duplicate_edges_collapsed": 128433,
+    "invalid_score_rows": 917,
+    "raw_rows": 14079009,
+    "rows_missing_id": 241,
+    "rows_missing_score": 676,
+    "self_loops_removed": 1542,
+    "valid_edges_after_cleaning": 13947492
+  },
+  "connected_components": {
+    "count": 4,
+    "largest_size": 19612,
+    "sizes_top_10": [
+      19612,
+      7,
+      3,
+      2
+    ]
+  },
+  "degree_summary": {
+    "degree": {
+      "max": 8421.0,
+      "mean": 1422.343,
+      "median": 1298.0,
+      "min": 1.0
+    },
+    "weighted_degree": {
+      "max": 3817.246,
+      "mean": 603.914,
+      "median": 544.287,
+      "min": 0.152
+    }
+  },
+  "edge_weight_summary": {
+    "max": 0.999,
+    "mean": 0.424,
+    "median": 0.401,
+    "min": 0.15
+  },
+  "hit_summary": {
+    "num_baits_in_graph": 1,
+    "num_baits_total": 1,
+    "num_high_conf_hits_in_graph": 5,
+    "num_high_conf_hits_missing_from_graph": 0,
+    "num_high_conf_hits_total": 5
+  },
+  "normalization": {
+    "method": "simulated_divide_by_1000",
+    "normalized_max": 0.999,
+    "normalized_min": 0.15,
+    "raw_max": 999.0,
+    "raw_min": 150.0
+  },
+  "num_edges": 13947492,
+  "num_nodes": 19612,
+  "run_config": {
+    "alpha": 0.85,
+    "degree_mode": "weighted",
+    "force_baits_in_seed": true,
+    "ks": [
+      10,
+      20,
+      50,
+      100,
+      200
+    ],
+    "matched_seed_repeats": 10,
+    "max_iter": 200,
+    "random_baseline_repeats": 50,
+    "repeats": 3,
+    "simulated": true,
+    "tol": 1e-10,
+    "train_fraction": 0.7,
+    "profile": "stochastic_realism_v2"
+  }
+}

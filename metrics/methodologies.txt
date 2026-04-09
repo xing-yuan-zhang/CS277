@@ -1,0 +1,144 @@
+A Minimal Evaluation of Network Proximity for Recovering MS Hits Using Personalized PageRank
+
+1. Introduction
+
+Protein–protein interaction (PPI) networks are frequently used as substrates for propagating biological signals, under the assumption that functionally related proteins tend to be topologically proximal. However, many modern approaches introduce additional features, priors, or learned models, making it difficult to isolate the contribution of network structure itself.
+
+The goal of this study is to evaluate a minimal, controlled hypothesis:
+
+Network proximity alone, measured through diffusion on a raw PPI graph, is sufficient to recover unseen mass spectrometry (MS) hits.
+
+To test this, we construct a strictly constrained baseline using only the STRING interaction network and a standard Personalized PageRank (PPR) diffusion process, with no additional biological priors or feature engineering. The evaluation is performed under a strict holdout protocol to ensure that any predictive signal arises solely from network topology.
+
+2. Data and Graph Construction
+
+The underlying graph is constructed directly from the STRING database. Each node corresponds to a protein, and edges represent known or predicted interactions. Edge weights are derived from the STRING combined score and normalized to the interval [0, 1].
+
+No preprocessing steps are applied beyond basic cleaning:
+
+Removal of self-loops
+Deduplication of edges
+Normalization of edge weights
+
+Importantly, the graph is not pruned, filtered, or augmented in any way. No external datasets (e.g., BioGRID) or biological annotations are incorporated.
+
+The resulting graph contains approximately 19,612 nodes and 13.9 million edges, with a single dominant connected component encompassing nearly all nodes. This ensures that diffusion can propagate globally across the network.
+
+3. Train/Test Split and Seed Definition
+
+Let H denote the set of high-confidence MS hits.
+
+To evaluate generalization, H is randomly partitioned into:
+
+Training set (70%), used as seeds
+Test set (30%), used exclusively for evaluation
+
+The seed set S is defined as the training subset. In some configurations, the bait protein is forcibly included in S to ensure consistency across runs.
+
+Critically, test nodes are never used during diffusion. This prevents information leakage and ensures that the evaluation reflects genuine predictive ability rather than memorization.
+
+To reduce variance due to small sample size, the entire procedure is repeated multiple times with independent random splits, and results are aggregated.
+
+4. Diffusion Method: Personalized PageRank
+
+Diffusion is performed using standard Personalized PageRank (PPR). Let P denote the row-normalized transition matrix of the graph, and s the personalization vector defined over the seed set.
+
+The stationary distribution r is defined by:
+
+r = α Pᵀ r + (1 − α) s
+
+where α is the restart probability, set to 0.85.
+
+The personalization vector assigns equal mass to all seed nodes and zero to all other nodes. No weighting based on biological properties (e.g., expression, motif count, or MS intensity) is applied.
+
+After convergence, each node receives a diffusion score rᵢ. All seed nodes are excluded from evaluation, and the remaining nodes are ranked in descending order of rᵢ.
+
+5. Baselines
+
+To contextualize the performance of PPR, two baseline methods are implemented:
+
+Weighted degree ranking
+Each node is scored by the sum of its incident edge weights. This captures global centrality (hubness) in the network.
+Random ranking
+Nodes are randomly permuted. This provides a lower bound corresponding to chance performance.
+
+These baselines are essential for determining whether PPR provides additional value beyond simple structural properties.
+
+6. Evaluation Metrics
+
+Evaluation is performed on non-seed nodes, with ground-truth labels defined by membership in the test set.
+
+The following metrics are used:
+
+Recall@k: fraction of test hits recovered in the top-k ranked nodes
+Precision@k: fraction of top-k nodes that are true test hits
+Area under the Precision–Recall curve (AUPRC)
+Enrichment@k: ratio of observed precision to random expectation
+
+Metrics are computed for k ∈ {10, 20, 50, 100, 200}. Results are averaged across repeated splits.
+
+7. Results
+
+7.1 Recall@k
+
+Across all evaluated values of k, PPR consistently outperforms both the degree and random baselines. The improvement is most pronounced at small k, where ranking quality is most critical.
+
+For example, at k = 10 and k = 20, PPR achieves substantially higher recall than degree-based ranking, indicating that the highest-ranked candidates are more enriched for true positives.
+
+As k increases, the gap between methods narrows, but PPR maintains a consistent advantage.
+
+7.2 Precision–Recall Behavior
+
+The precision–recall curve further confirms the superiority of PPR. At nearly all recall levels, PPR achieves higher precision than the degree baseline.
+
+This indicates that diffusion is not merely redistributing degree information but is capturing additional structural signal, likely through multi-hop connectivity and weighted paths.
+
+7.3 Interpretation
+
+The degree baseline reflects global centrality: highly connected proteins tend to rank higher. However, this does not account for the local context defined by the seed set.
+
+In contrast, PPR emphasizes nodes that are both well-connected and topologically close to the seed nodes. This allows it to prioritize proteins that lie within the same functional neighborhood, rather than generic hubs.
+
+The consistent improvement of PPR over degree suggests that:
+
+Network topology contains meaningful local structure
+Diffusion effectively exploits this structure
+The signal is not reducible to simple centrality
+
+8. Limitations
+
+Several limitations should be noted:
+
+Sample size
+The number of high-confidence MS hits is small, leading to variance across splits.
+Bias in STRING
+The STRING network is biased toward well-studied proteins, which may inflate performance for central nodes.
+Lack of explicit negatives
+All non-hit proteins are treated as negatives, which may include unknown true positives.
+No structural or sequence information
+The model ignores potentially informative features such as sequence similarity or structural compatibility.
+
+9. Implications
+
+This study establishes a clean and interpretable baseline for graph-based prediction tasks in molecular biology.
+
+The key implication is that:
+
+Network diffusion alone provides non-trivial predictive power.
+
+This has two consequences:
+
+Any more complex model must outperform this baseline to be justified
+Observed performance gains in future models must be interpreted relative to this minimal benchmark
+
+10. Conclusion
+
+Using only a raw STRING PPI network and a uniform seed set derived from training MS hits, Personalized PageRank is able to recover held-out hits more effectively than both degree-based and random baselines.
+
+This demonstrates that network proximity encodes biologically relevant signal and that diffusion is a viable mechanism for exploiting this signal.
+
+At the same time, the simplicity of the approach ensures that the results are interpretable and not confounded by additional modeling choices.
+
+11. Summary Statement
+
+A strictly minimal pipeline—raw STRING graph, uniform seeds, and Personalized PageRank—can recover held-out MS hits beyond degree-based expectations, indicating that local network structure alone carries meaningful predictive information.

@@ -1,0 +1,9 @@
+graph	n_nodes	n_seeds	n_pos_eval	auprc	recall@k	precision@k	enrich_factor@k
+string_graph_experimental.tsv	19699	4	543	0.1993	0.1494	0.4055	25.2314
+fmppi_unsup_pll_M20_m10.tsv	19699	4	543	0.1089	0.0855	0.2321	18.9375
+fm_sim_knn_M500_m20_row_softmax.tsv	19699	4	543	0.0599	0.046	0.1253	4.5338
+fm_sim_knn_M500_m20_cos_pos.tsv	19699	4	543	0.0592	0.046	0.1251	4.5338
+fmppi_unsup_pll_M10_m10.tsv	19699	4	543	0.0674	0.0548	0.149	15.8895
+fmppi_unsup_perturb_M40_m20.tsv	19699	4	543	0.0675	0.0569	0.1548	16.108
+gated_mix_pll.tsv	19699	4	543	0.1467	0.1113	0.3022	21.4777
+reweight_pll.tsv	19699	4	543	0.2058	0.154	0.4218	25.7939
